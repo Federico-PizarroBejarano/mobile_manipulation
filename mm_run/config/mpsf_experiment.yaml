@@ -1,0 +1,45 @@
+# Example configuration demonstrating Model Predictive Safety Filter (MPSF)
+# This showcases:
+# - MPSF controller that minimizes difference between desired and actual state-space velocities
+# - Self-collision avoidance (important safety feature)
+# - Safety filtering of velocity commands in state-space (base + EE velocities)
+
+controller:
+  type: "MPSF"
+
+  # MPSF parameters
+  objective_horizon: 1   # Number of steps with non-zero weights (1 to N+1), default: N+1
+  decay_rate: 1.0         # Decay factor per time step (0 to 1), default: 1.0 (no decay)
+
+  cost_params:
+    # Base velocity tracking cost (3D: vx, vy, vyaw)
+    BaseVel:
+      Qk: [10, 10, 10]  # Weights for [vx, vy, vyaw] - higher = stronger tracking
+      P:  [ 0,  0,  0]     # Terminal weights
+    # End-effector velocity tracking cost (6D: vx, vy, vz, wx, wy, wz)
+    EEVel:
+      Qk: [0, 10, 10, 10, 10, 10]  # Weights for [vx, vy, vz, wx, wy, wz]
+      P:  [0,  0,  0,  0,  0,  0]  # Terminal weights
+
+  self_collision_avoidance_enabled: True
+
+  # ACADOS solver option - only override the name (everything else inherited from MPC.yaml)
+  acados:
+    name: "MPSF"
+
+simulation:
+  duration: 4
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"  # Use MPC config for base controller settings
+  - package: "mm_run"
+    path: "config/sim/simulation.yaml"
+  - package: "mm_run"
+    path: "config/scene/empty.yaml"
+
+logging:
+  log_dir: "mpsf_experiment"
+  log_level: 10 # 0 - not set, 10 - debug, 20 - info

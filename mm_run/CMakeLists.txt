@@ -12,6 +12,7 @@ catkin_package()
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
    scripts/experiment.py
+   scripts/mpsf_experiment.py
    nodes/sim_ros.py
    nodes/isaac_sim_ros.py
    nodes/mpc_ros.py

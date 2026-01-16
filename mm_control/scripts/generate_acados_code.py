@@ -1,6 +1,7 @@
 import argparse
 
 from mm_control.MPC import MPC
+from mm_control.MPSF import MPSF
 from mm_utils import parsing
 
 if __name__ == "__main__":
@@ -28,6 +29,8 @@ if __name__ == "__main__":
 
     if ctrl_type == "MPC":
         control_class = MPC
+    elif ctrl_type == "MPSF":
+        control_class = MPSF
     else:
         raise ValueError(f"Unknown controller type: {ctrl_type}")
 
