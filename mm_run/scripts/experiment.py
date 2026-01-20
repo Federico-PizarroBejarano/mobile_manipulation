@@ -73,7 +73,7 @@ def main():
 
     sim_config = config["simulation"]
     ctrl_config = config["controller"]
-    planner_config = config["planner"]
+    planner_config = config.get("planner", None)
 
     # Simulator
     timestamp = datetime.datetime.now()
@@ -125,12 +125,25 @@ def main():
     sot.activatePlanners()
     u = np.zeros(sim_config["robot"]["dims"]["v"])
 
+    # Desired velocity (optional - for velocity-only mode similar to MPSF)
+    # desired_base_velocity = None
+    # desired_ee_velocity = None
+    desired_base_velocity = np.array([1.0, 0.5, 0.2])
+    desired_ee_velocity = np.array([0.3, 0.3, 0.0, 0.0, 0.0, 0.0])
+
     while t <= sim.duration:
         # open-loop command
         robot_states = robot.joint_states(add_noise=False)
 
         # Get references from TaskManager
         references = sot.getReferences(t, robot_states, controller.N + 1, controller.dt)
+
+        # If desired_velocity is provided, add it to references for MPC to handle merging
+        if desired_base_velocity is not None or desired_ee_velocity is not None:
+            references["desired_velocity"] = {
+                "base_velocity": desired_base_velocity,
+                "ee_velocity": desired_ee_velocity,
+            }
 
         t0 = time.perf_counter()
         v_bar, u_bar = controller.control(t, robot_states, references)
@@ -174,7 +187,10 @@ def main():
             "EE": {"pose": ee_pose, "velocity": ee_vel},
         }
 
-        sot.update(t, states)
+        # Pass MPC masks to TaskManager for task completion checks
+        sot.update(
+            t, states, base_mask=controller.base_mask, ee_mask=controller.ee_mask
+        )
 
         # log
         v_ew_w, ω_ew_w = robot.link_velocity()

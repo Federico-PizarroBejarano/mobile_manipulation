@@ -14,8 +14,12 @@ class TaskManager:
     def __init__(self, config):
         self.config = config
         self.started = False
-        self.planners = [create_planner(task) for task in config["tasks"]]
-        self.planner_num = len(self.planners)
+        if config is not None:
+            self.planners = [create_planner(task) for task in config["tasks"]]
+            self.planner_num = len(self.planners)
+        else:
+            self.planners = []
+            self.planner_num = 0
         self.curr_task_id = 0
         self.logger = logging.getLogger("Planner")
 
@@ -30,7 +34,10 @@ class TaskManager:
         Returns:
             Active planner
         """
-        return self.planners[self.curr_task_id]
+        if self.planner_num == 0:
+            return None
+        else:
+            return self.planners[self.curr_task_id]
 
     def getReferences(self, t, robot_states, num_horizon_points, dt):
         """Extract references from active planners for MPC.
@@ -55,6 +62,14 @@ class TaskManager:
                 "ee_velocity": array of shape (N+1, 6) or None,
             }
         """
+        if self.planner_num == 0:
+            return {
+                "base_pose": None,
+                "base_velocity": None,
+                "ee_pose": None,
+                "ee_velocity": None,
+            }
+
         planner = self.getPlanner()
 
         # Initialize reference arrays
@@ -119,7 +134,7 @@ class TaskManager:
             "ee_velocity": ee_vel_ref,
         }
 
-    def update(self, t, states):
+    def update(self, t, states, base_mask=None, ee_mask=None):
         """Update task manager and check if current task is finished.
 
         Args:
@@ -127,6 +142,8 @@ class TaskManager:
             states (dict): Dictionary with "EE" and "base" states:
                 - "base": {"pose": [x, y, yaw], "velocity": [vx, vy, vyaw]}
                 - "EE": {"pose": [x, y, z, roll, pitch, yaw], "velocity": [vx, vy, vz, wx, wy, wz]}
+            base_mask (array, optional): MPC mask for base dimensions [x, y, yaw]. Defaults to all True.
+            ee_mask (array, optional): MPC mask for EE dimensions [x, y, z, roll, pitch, yaw]. Defaults to all True.
 
         Returns:
             (finished, increment): Whether current task finished, and increment (always 1)
@@ -141,7 +158,9 @@ class TaskManager:
             planner.started = True
             planner.start_time = t
 
-        finished = planner.checkFinished(t, states)
+        finished = planner.checkFinished(
+            t, states, base_mask=base_mask, ee_mask=ee_mask
+        )
 
         if finished:
             if self.curr_task_id < self.planner_num - 1:

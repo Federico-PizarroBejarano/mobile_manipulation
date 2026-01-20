@@ -82,6 +82,49 @@ class MPC(MPCBase):
         self.cost = costs
         self.constraints = constraints + [self.controlCst, self.stateCst]
 
+        # Get objective_horizon and decay_rate (defaults: full horizon, no decay)
+        # These are used for time-varying weights in BaseVel and EEVel
+        self.objective_horizon = config.get("objective_horizon", self.N + 1)
+        self.decay_rate = config.get("decay_rate", 1.0)
+
+        # Get MPC-level masks (default: all True - track all dimensions)
+        # These apply to both pose and velocity tracking from planners
+        if "base_mask" in config:
+            self.base_mask = np.array(config["base_mask"], dtype=float)
+        else:
+            self.base_mask = np.ones(3, dtype=float)
+
+        if "ee_mask" in config:
+            self.ee_mask = np.array(config["ee_mask"], dtype=float)
+        else:
+            self.ee_mask = np.ones(6, dtype=float)
+
+        # Get MPSF-level masks from mpsf_params section (optional)
+        # These only apply to external velocity commands (desired_velocity)
+        mpsf_params = config.get("mpsf_params", {})
+        self.mpsf_base_mask = np.zeros(3, dtype=float)
+        self.mpsf_ee_mask = np.zeros(6, dtype=float)
+
+        # Update objective_horizon and decay_rate from mpsf_params if present
+        if "objective_horizon" in mpsf_params:
+            self.objective_horizon = mpsf_params["objective_horizon"]
+        if "decay_rate" in mpsf_params:
+            self.decay_rate = mpsf_params["decay_rate"]
+        if "mpsf_base_mask" in mpsf_params:
+            self.mpsf_base_mask = np.array(mpsf_params["mpsf_base_mask"], dtype=float)
+            # Check for conflicts
+            if np.any((self.base_mask == 1.0) & (self.mpsf_base_mask == 1.0)):
+                raise ValueError(
+                    "Conflict between MPC base_mask and mpsf_base_mask: both are True for same dimension."
+                )
+        if "mpsf_ee_mask" in mpsf_params:
+            self.mpsf_ee_mask = np.array(mpsf_params["mpsf_ee_mask"], dtype=float)
+            # Check for conflicts
+            if np.any((self.ee_mask == 1.0) & (self.mpsf_ee_mask == 1.0)):
+                raise ValueError(
+                    "Conflict between MPC ee_mask and mpsf_ee_mask: both are True for same dimension."
+                )
+
     def _get_config_key_for_cost_name(self, cost_name):
         """Map cost function name to simplified config parameter key.
 
@@ -125,6 +168,8 @@ class MPC(MPCBase):
                     "base_velocity": array of shape (N+1, 3) or None,
                     "ee_pose": array of shape (N+1, 6) or None,
                     "ee_velocity": array of shape (N+1, 6) or None,
+                    "base_mask": array of shape (3,) or None - mask for base pose dimensions [x, y, yaw]
+                    "ee_mask": array of shape (6,) or None - mask for EE pose dimensions [x, y, z, roll, pitch, yaw]
                 }
 
         Returns:
@@ -137,6 +182,70 @@ class MPC(MPCBase):
         q, v = robot_states
         q[2:9] = wrap_pi_array(q[2:9])
         xo = np.hstack((q, v))
+
+        # Merge desired_velocity with planner velocity if MPSF masks are set
+        # desired_velocity comes from references dict: {"base_velocity": array, "ee_velocity": array}
+        desired_velocity = references.get("desired_velocity")
+        if desired_velocity is not None:
+            # Merge base velocity
+            if "base_velocity" in desired_velocity:
+                planner_base_vel = references.get("base_velocity")
+                mpsf_base_vel = desired_velocity["base_velocity"]
+
+                # Ensure both are in horizon format (N+1, 3)
+                N = self.N + 1
+                if planner_base_vel is None:
+                    planner_base_vel = np.zeros((N, 3))
+                elif planner_base_vel.shape[0] != N:
+                    raise ValueError(
+                        f"Planner base velocity shape mismatch: {planner_base_vel.shape} != {N}"
+                    )
+
+                if mpsf_base_vel.ndim == 1:
+                    mpsf_base_vel = np.tile(mpsf_base_vel, (N, 1))
+                elif mpsf_base_vel.shape[0] != N:
+                    raise ValueError(
+                        f"MPSF base velocity shape mismatch: {mpsf_base_vel.shape} != {N}"
+                    )
+
+                # Merge: where mpsf_mask is True, use desired_velocity; where base_mask is True, use planner
+                merged_base_vel = np.zeros_like(planner_base_vel)
+                for i in range(3):
+                    if self.mpsf_base_mask[i] == 1.0:
+                        merged_base_vel[:, i] = mpsf_base_vel[:, i]
+                    elif self.base_mask[i] == 1.0:
+                        merged_base_vel[:, i] = planner_base_vel[:, i]
+                references["base_velocity"] = merged_base_vel
+
+            # Merge EE velocity
+            if "ee_velocity" in desired_velocity:
+                planner_ee_vel = references.get("ee_velocity")
+                mpsf_ee_vel = desired_velocity["ee_velocity"]
+
+                # Ensure both are in horizon format (N+1, 6)
+                N = self.N + 1
+                if planner_ee_vel is None:
+                    planner_ee_vel = np.zeros((N, 6))
+                elif planner_ee_vel.shape[0] != N:
+                    raise ValueError(
+                        f"Planner ee velocity shape mismatch: {planner_ee_vel.shape} != {N}"
+                    )
+
+                if mpsf_ee_vel.ndim == 1:
+                    mpsf_ee_vel = np.tile(mpsf_ee_vel, (N, 1))
+                elif mpsf_ee_vel.shape[0] != N:
+                    raise ValueError(
+                        f"MPSF ee velocity shape mismatch: {mpsf_ee_vel.shape} != {N}"
+                    )
+
+                # Merge: where mpsf_mask is True, use desired_velocity; where ee_mask is True, use planner
+                merged_ee_vel = np.zeros_like(planner_ee_vel)
+                for i in range(6):
+                    if self.mpsf_ee_mask[i] == 1.0:
+                        merged_ee_vel[:, i] = mpsf_ee_vel[:, i]
+                    elif self.ee_mask[i] == 1.0:
+                        merged_ee_vel[:, i] = planner_ee_vel[:, i]
+                references["ee_velocity"] = merged_ee_vel
 
         x_bar_initial, u_bar_initial = self._prepare_warm_start(t, xo)
         r_bar_map = self._convert_references_to_r_bar_map(references, xo)
@@ -300,12 +409,52 @@ class MPC(MPCBase):
                 if name in r_bar_map:
                     # Reference provided: set reference and use configured weights
                     curr_p_map[p_name_r] = r_bar_map[name][i]
+                    dim = len(r_bar_map[name][i])
                     config_key = self._get_config_key_for_cost_name(name)
                     cost_params = self.params["cost_params"].get(config_key, {})
                     weight_key = "P" if i == self.N else "Qk"
-                    weights = cost_params.get(
-                        weight_key, [1.0] * len(r_bar_map[name][i])
+                    weights = np.array(
+                        cost_params.get(weight_key, [1.0] * dim), dtype=float
                     )
+
+                    if len(weights) != dim:
+                        raise ValueError(
+                            f"Weight length mismatch for {name}: {len(weights)} != {dim}"
+                        )
+
+                    # Apply MPC masks to pose costs (zero out weights for masked dimensions)
+                    if name == "BasePoseSE2":
+                        weights = weights * self.base_mask
+                    elif name == "EEPoseSE3":
+                        weights = weights * self.ee_mask
+                    elif name in ["BaseVel3", "EEVel6"]:
+                        weight_scale = (
+                            self.decay_rate**i if i <= self.objective_horizon else 0
+                        )
+                        if name == "BaseVel3":
+                            if self.mpsf_base_mask is not None:
+                                # Union: activate if either mask is True
+                                velocity_mask = np.maximum(
+                                    self.base_mask, self.mpsf_base_mask
+                                )
+                                weights[self.mpsf_base_mask == 1] *= weight_scale
+                            else:
+                                velocity_mask = self.base_mask
+                        elif name == "EEVel6":
+                            if self.mpsf_ee_mask is not None:
+                                # Union: activate if either mask is True
+                                velocity_mask = np.maximum(
+                                    self.ee_mask, self.mpsf_ee_mask
+                                )
+                                weights[self.mpsf_ee_mask == 1] *= weight_scale
+                            else:
+                                velocity_mask = self.ee_mask
+
+                        # Apply velocity mask to weights
+                        weights = weights * velocity_mask
+                    else:
+                        raise ValueError(f"Unknown cost function name: {name}")
+
                     curr_p_map[p_name_W] = np.diag(weights)
                 else:
                     # No reference provided: set weights to zero (minimize control effort only)

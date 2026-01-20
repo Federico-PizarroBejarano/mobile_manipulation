@@ -1,31 +1,33 @@
-# Example configuration demonstrating Model Predictive Safety Filter (MPSF)
+# Example configuration demonstrating MPC with velocity-only tracking (similar to MPSF)
 # This showcases:
-# - MPSF controller that minimizes difference between desired and actual state-space velocities
+# - MPC controller tracking only base and EE velocities (no pose tracking)
 # - Self-collision avoidance (important safety feature)
-# - Safety filtering of velocity commands in state-space (base + EE velocities)
+# - Velocity commands in state-space (base + EE velocities)
+
+planner:
+  tasks:
+  - name: Position Only
+    planner_type: WaypointPlanner
+    base_pose: [1.5, 0.4, 0.5]   # x, y, yaw in world frame
+    tracking_pos_err_tol: 0.08
 
 controller:
-  type: "MPSF"
+  base_mask: [true, true, true]
+  ee_mask: [false, false, false, false, false, false]
 
   # MPSF parameters
-  objective_horizon: 1   # Number of steps with non-zero weights (1 to N+1), default: N+1
-  decay_rate: 1.0         # Decay factor per time step (0 to 1), default: 1.0 (no decay)
-
-  cost_params:
-    # Base velocity tracking cost (3D: vx, vy, vyaw)
-    BaseVel:
-      Qk: [10, 10, 10]  # Weights for [vx, vy, vyaw] - higher = stronger tracking
-      P:  [ 0,  0,  0]     # Terminal weights
-    # End-effector velocity tracking cost (6D: vx, vy, vz, wx, wy, wz)
-    EEVel:
-      Qk: [0, 10, 10, 10, 10, 10]  # Weights for [vx, vy, vz, wx, wy, wz]
-      P:  [0,  0,  0,  0,  0,  0]  # Terminal weights
+  mpsf_params:
+    objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1), default: N+1
+    decay_rate: 1.0         # Decay factor per time step (0 to 1), default: 1.0 (no decay)
+    mpsf_base_mask: [false, false, false]
+    mpsf_ee_mask: [true, true, true, false, false, false]
 
   self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: False
 
   # ACADOS solver option - only override the name (everything else inherited from MPC.yaml)
   acados:
-    name: "MPSF"
+    name: "MPSF_Velocity"
 
 simulation:
   duration: 4
@@ -41,5 +43,5 @@ include:
     path: "config/scene/empty.yaml"
 
 logging:
-  log_dir: "mpsf_experiment"
+  log_dir: "mpc_velocity_experiment"
   log_level: 10 # 0 - not set, 10 - debug, 20 - info

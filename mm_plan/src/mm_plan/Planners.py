@@ -175,19 +175,6 @@ class WaypointPlanner(Planner):
         self.tracking_ori_err_tol = config.get("tracking_ori_err_tol", 0.1)
         self.hold_period = config.get("hold_period", 0.0)
 
-        # Parse masks to specify which dimensions matter for completion
-        # base_mask: [x, y, yaw] - True means that dimension is checked
-        if "base_mask" in config:
-            self.base_mask = np.array(config["base_mask"], dtype=bool)
-        else:
-            self.base_mask = np.ones(3, dtype=bool)
-
-        # ee_mask: [x, y, z, roll, pitch, yaw] - True means that dimension is checked
-        if "ee_mask" in config:
-            self.ee_mask = np.array(config["ee_mask"], dtype=bool)
-        else:
-            self.ee_mask = np.ones(6, dtype=bool)
-
         # State tracking
         self.finished = False
         self.base_reached = False
@@ -222,16 +209,28 @@ class WaypointPlanner(Planner):
             return None, None
         return self.ee_target.copy(), np.zeros(6)
 
-    def checkFinished(self, t, states):
+    def checkFinished(self, t, states, base_mask=None, ee_mask=None):
         """Check if waypoint has been reached.
 
         Args:
             t (float): Current time.
             states (dict): Dictionary with "base" and "EE" keys containing pose information.
+            base_mask (array, optional): MPC mask for base dimensions [x, y, yaw]. Defaults to all True.
+            ee_mask (array, optional): MPC mask for EE dimensions [x, y, z, roll, pitch, yaw]. Defaults to all True.
 
         Returns:
             bool: True if waypoint has been reached, False otherwise.
         """
+        # Default masks: all True if not provided
+        if base_mask is None:
+            base_mask = np.ones(3, dtype=bool)
+        else:
+            base_mask = np.array(base_mask, dtype=bool)
+        if ee_mask is None:
+            ee_mask = np.ones(6, dtype=bool)
+        else:
+            ee_mask = np.array(ee_mask, dtype=bool)
+
         base_finished = True
         ee_finished = True
 
@@ -240,17 +239,22 @@ class WaypointPlanner(Planner):
             base_pose = states["base"]["pose"]
 
             # Check position (x, y) only if mask indicates it matters
-            pos_mask = self.base_mask[:2]
+            pos_mask = base_mask[:2]
             pos_err = np.linalg.norm((base_pose[:2] - self.base_target[:2])[pos_mask])
             pos_within_tol = pos_err < self.tracking_pos_err_tol
 
             # Check orientation (yaw) only if mask indicates it matters
-            if self.base_mask[2]:
+            if base_mask[2]:
                 yaw_err = abs(wrap_pi_scalar(base_pose[2] - self.base_target[2]))
                 ori_within_tol = yaw_err < self.tracking_ori_err_tol
             else:
                 ori_within_tol = True
                 yaw_err = 0.0
+
+            # Print base position and orientation error (masked)
+            self.py_logger.debug(
+                f"{self.name} base pos_err: {pos_err:.5f}, yaw_err: {yaw_err:.5f}"
+            )
 
             if pos_within_tol and ori_within_tol:
                 if not self.base_reached:
@@ -271,15 +275,20 @@ class WaypointPlanner(Planner):
             ee_pose = states["EE"]["pose"]
 
             # Check position (x, y, z) only if mask indicates it matters
-            pos_mask = self.ee_mask[:3]
+            pos_mask = ee_mask[:3]
             pos_err = np.linalg.norm((ee_pose[:3] - self.ee_target[:3])[pos_mask])
             pos_within_tol = pos_err < self.tracking_pos_err_tol
 
             # Check orientation (roll, pitch, yaw) only if mask indicates it matters
-            ori_mask = self.ee_mask[3:]
+            ori_mask = ee_mask[3:]
             ori_diff = wrap_pi_array(ee_pose[3:] - self.ee_target[3:])
             ori_err = np.linalg.norm(ori_diff[ori_mask])
             ori_within_tol = ori_err < self.tracking_ori_err_tol
+
+            # Print EE position and orientation error (masked)
+            self.py_logger.debug(
+                f"{self.name} ee pos_err: {pos_err:.5f}, ori_err: {ori_err:.5f}"
+            )
 
             if pos_within_tol and ori_within_tol:
                 if not self.ee_reached:
@@ -474,28 +483,28 @@ class PathPlanner(Planner):
         velocities = np.array([interpolate(t, self.ee_plan)[1] for t in times])
         return positions, velocities
 
-    def _compute_error(self, curr_pose, end_pose, is_base):
-        """Compute position and orientation errors."""
-        if is_base:
-            pos_err = np.linalg.norm(curr_pose[:2] - end_pose[:2])
-            yaw_err = abs(wrap_pi_scalar(curr_pose[2] - end_pose[2]))
-            return pos_err, yaw_err
-        else:  # EE
-            pos_err = np.linalg.norm(curr_pose[:3] - end_pose[:3])
-            ori_diff = wrap_pi_array(curr_pose[3:] - end_pose[3:])
-            ori_err = np.linalg.norm(ori_diff)
-            return pos_err, ori_err
-
-    def checkFinished(self, t, states):
+    def checkFinished(self, t, states, base_mask=None, ee_mask=None):
         """Check if path has been completed.
 
         Args:
             t (float): Current time.
             states (dict): Dictionary with "base" and "EE" keys containing pose information.
+            base_mask (array, optional): MPC mask for base dimensions [x, y, yaw]. Defaults to all True.
+            ee_mask (array, optional): MPC mask for EE dimensions [x, y, z, roll, pitch, yaw]. Defaults to all True.
 
         Returns:
             bool: True if path has been completed, False otherwise.
         """
+        # Default masks: all True if not provided
+        if base_mask is None:
+            base_mask = np.ones(3, dtype=bool)
+        else:
+            base_mask = np.array(base_mask, dtype=bool)
+        if ee_mask is None:
+            ee_mask = np.ones(6, dtype=bool)
+        else:
+            ee_mask = np.array(ee_mask, dtype=bool)
+
         base_finished = True
         ee_finished = True
 
@@ -504,9 +513,19 @@ class PathPlanner(Planner):
             base_pose = states["base"]["pose"]
             base_vel = states["base"].get("velocity")
             end_pose = self.base_plan["p"][-1]
-            pos_err, ori_err = self._compute_error(base_pose, end_pose, is_base=True)
+
+            # Apply mask to error computation
+            pos_mask = base_mask[:2]
+            pos_err = np.linalg.norm((base_pose[:2] - end_pose[:2])[pos_mask])
             pos_cond = pos_err < self.tracking_pos_err_tol
-            ori_cond = ori_err < self.tracking_ori_err_tol
+
+            # Check orientation only if mask indicates it matters
+            if base_mask[2]:
+                yaw_err = abs(wrap_pi_scalar(base_pose[2] - end_pose[2]))
+                ori_cond = yaw_err < self.tracking_ori_err_tol
+            else:
+                ori_cond = True
+
             pos_ori_cond = pos_cond and ori_cond
             vel_cond = base_vel is not None and np.linalg.norm(base_vel) < 1e-2
 
@@ -522,9 +541,18 @@ class PathPlanner(Planner):
             ee_pose = states["EE"]["pose"]
             ee_vel = states["EE"].get("velocity")
             end_pose = self.ee_plan["p"][-1]
-            pos_err, ori_err = self._compute_error(ee_pose, end_pose, is_base=False)
+
+            # Apply mask to error computation
+            pos_mask = ee_mask[:3]
+            pos_err = np.linalg.norm((ee_pose[:3] - end_pose[:3])[pos_mask])
             pos_cond = pos_err < self.tracking_pos_err_tol
+
+            # Check orientation only if mask indicates it matters
+            ori_mask = ee_mask[3:]
+            ori_diff = wrap_pi_array(ee_pose[3:] - end_pose[3:])
+            ori_err = np.linalg.norm(ori_diff[ori_mask])
             ori_cond = ori_err < self.tracking_ori_err_tol
+
             pos_ori_cond = pos_cond and ori_cond
             vel_cond = ee_vel is not None and np.linalg.norm(ee_vel) < 1e-2
 
