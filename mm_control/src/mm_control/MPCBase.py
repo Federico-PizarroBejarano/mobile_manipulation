@@ -74,7 +74,6 @@ class MPCBase:
         self.u_bar = np.zeros((self.N, self.nu))  # current best guess u0,...,uN-1
         self.t_bar = None
         self.lam_bar = None  # inequality multipliers
-        self.u_prev = np.zeros(self.nu)
 
         self.v_cmd = np.zeros(self.nx - self.DoF)
 

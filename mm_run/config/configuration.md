@@ -142,19 +142,6 @@ controller:
   collision_soft:
     self: {mu: 0.0001, zeta: 0.005}
     static_obstacles: {mu: 0.0001, zeta: 0.005}
-  ee_upward_soft:
-    mu: 0.001
-    zeta: 0.01
-```
-
-### End-Effector Constraints
-
-```yaml
-controller:
-  ee_upward_constraint_enabled: bool
-  ee_upward_deviation_angle_max: 0.20  # [rad]
-  ee_pose_tracking_enabled: bool
-  base_pose_tracking_enabled: bool
 ```
 
 ### Cost Function Weights
@@ -196,8 +183,6 @@ controller:
       Qvb: [v1, v2, v3]           # Base velocity weights
       Qua: [u1, ..., u6]          # Arm input weights
       Qub: [u1, u2, u3]           # Base input weights
-      Qdua: [du1, ..., du6]       # Arm input rate weights
-      Qdub: [du1, du2, du3]       # Base input rate weights
 
     # Regularization
     Regularization:
@@ -253,7 +238,6 @@ controller:
 controller:
   beta: 0.5              # Line search reduction factor
   alpha: 0.05            # Line search step size
-  penalize_du: bool      # Penalize input rate in cost
 ```
 
 ### Robot Parameters
@@ -270,7 +254,6 @@ controller:
     x0: [q1, ..., qn, v1, ..., vn]
 
     limits:
-      input_rate: {lower: [...], upper: [...]}
       input: {lower: [...], upper: [...]}
       state: {lower: [...], upper: [...]}
 

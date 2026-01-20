@@ -50,8 +50,6 @@ controller:
       Qvb: 0.01
       Qua: 0.005
       Qub: 0.005
-      Qdua: 0.0
-      Qdub: 0.1
 
     # Slack variables
     slack:

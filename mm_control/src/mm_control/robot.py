@@ -637,12 +637,6 @@ class MobileManipulator3D:
         self.lb_x = parsing.parse_array(config["robot"]["limits"]["state"]["lower"])
         self.ub_u = parsing.parse_array(config["robot"]["limits"]["input"]["upper"])
         self.lb_u = parsing.parse_array(config["robot"]["limits"]["input"]["lower"])
-        self.ub_udot = parsing.parse_array(
-            config["robot"]["limits"]["input_rate"]["upper"]
-        )
-        self.lb_udot = parsing.parse_array(
-            config["robot"]["limits"]["input_rate"]["lower"]
-        )
 
         self.link_names = config["robot"]["link_names"]
         self.tool_link_name = config["robot"]["tool_link_name"]
@@ -687,8 +681,6 @@ class MobileManipulator3D:
             "lb_x": list(self.lb_x),
             "ub_u": list(self.ub_u),
             "lb_u": list(self.lb_u),
-            "ub_udot": list(self.ub_udot),
-            "lb_udot": list(self.lb_udot),
         }
 
         A = cs.DM.zeros((nx, nx))
