@@ -23,7 +23,7 @@ controller:
     mpsf_ee_mask: [true, true, true, false, false, false]
 
   self_collision_avoidance_enabled: True
-  static_obstacles_collision_avoidance_enabled: False
+  static_obstacles_collision_avoidance_enabled: True
 
   # ACADOS solver option - only override the name (everything else inherited from MPC.yaml)
   acados:
