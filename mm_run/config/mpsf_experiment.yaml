@@ -21,6 +21,7 @@ controller:
     decay_rate: 1.0         # Decay factor per time step (0 to 1), default: 1.0 (no decay)
     mpsf_base_mask: [false, false, false]
     mpsf_ee_mask: [true, true, true, false, false, false]
+    mpsf_weight_multiplier: 1.0
 
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
@@ -43,5 +44,5 @@ include:
     path: "config/scene/empty.yaml"
 
 logging:
-  log_dir: "mpc_velocity_experiment"
+  log_dir: "mpsf_experiment"
   log_level: 10 # 0 - not set, 10 - debug, 20 - info

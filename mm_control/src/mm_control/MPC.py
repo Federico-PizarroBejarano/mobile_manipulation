@@ -110,6 +110,7 @@ class MPC(MPCBase):
             self.objective_horizon = mpsf_params["objective_horizon"]
         if "decay_rate" in mpsf_params:
             self.decay_rate = mpsf_params["decay_rate"]
+        self.mpsf_weight_multiplier = mpsf_params.get("mpsf_weight_multiplier", 1.0)
         if "mpsf_base_mask" in mpsf_params:
             self.mpsf_base_mask = np.array(mpsf_params["mpsf_base_mask"], dtype=float)
             # Check for conflicts
@@ -437,7 +438,9 @@ class MPC(MPCBase):
                                 velocity_mask = np.maximum(
                                     self.base_mask, self.mpsf_base_mask
                                 )
-                                weights[self.mpsf_base_mask == 1] *= weight_scale
+                                weights[self.mpsf_base_mask == 1] *= (
+                                    weight_scale * self.mpsf_weight_multiplier
+                                )
                             else:
                                 velocity_mask = self.base_mask
                         elif name == "EEVel6":
@@ -446,7 +449,9 @@ class MPC(MPCBase):
                                 velocity_mask = np.maximum(
                                     self.ee_mask, self.mpsf_ee_mask
                                 )
-                                weights[self.mpsf_ee_mask == 1] *= weight_scale
+                                weights[self.mpsf_ee_mask == 1] *= (
+                                    weight_scale * self.mpsf_weight_multiplier
+                                )
                             else:
                                 velocity_mask = self.ee_mask
 

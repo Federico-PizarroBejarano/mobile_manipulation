@@ -174,6 +174,7 @@ class WaypointPlanner(Planner):
         self.tracking_pos_err_tol = config.get("tracking_pos_err_tol", 0.02)
         self.tracking_ori_err_tol = config.get("tracking_ori_err_tol", 0.1)
         self.hold_period = config.get("hold_period", 0.0)
+        self.end_stop = config.get("end_stop", False)
 
         # State tracking
         self.finished = False
@@ -189,11 +190,12 @@ class WaypointPlanner(Planner):
             robot_states (dict, optional): Current robot states (unused for waypoint planner).
 
         Returns:
-            tuple: (position, velocity) where position is (3,) array and velocity is (3,) array, or (None, None) if no base reference.
+            tuple: (position, velocity) where position is (3,) array and velocity is (3,) array or None, or (None, None) if no base reference.
         """
         if not self.has_base_ref:
             return None, None
-        return self.base_target.copy(), np.zeros(3)
+        velocity = np.zeros(3) if self.end_stop else None
+        return self.base_target.copy(), velocity
 
     def getEETrackingPoint(self, t, robot_states=None):
         """Get EE tracking point.
@@ -203,11 +205,12 @@ class WaypointPlanner(Planner):
             robot_states (dict, optional): Current robot states (unused for waypoint planner).
 
         Returns:
-            tuple: (position, velocity) where position is (6,) array [x,y,z,qx,qy,qz,qw] and velocity is (6,) array, or (None, None) if no EE reference.
+            tuple: (position, velocity) where position is (6,) array [x,y,z,qx,qy,qz,qw] and velocity is (6,) array or None, or (None, None) if no EE reference.
         """
         if not self.has_ee_ref:
             return None, None
-        return self.ee_target.copy(), np.zeros(6)
+        velocity = np.zeros(6) if self.end_stop else None
+        return self.ee_target.copy(), velocity
 
     def checkFinished(self, t, states, base_mask=None, ee_mask=None):
         """Check if waypoint has been reached.

@@ -107,7 +107,8 @@ class TaskManager:
                 p, v = planner.getBaseTrackingPoint(t, robot_states)
                 if p is not None:
                     base_pose_ref = np.tile(p, (num_horizon_points, 1))
-                    base_vel_ref = np.tile(v, (num_horizon_points, 1))
+                    if v is not None:
+                        base_vel_ref = np.tile(v, (num_horizon_points, 1))
 
         # Process EE references
         if planner.has_ee_ref:
@@ -125,7 +126,8 @@ class TaskManager:
                 p, v = planner.getEETrackingPoint(t, robot_states)
                 if p is not None:
                     ee_pose_ref = np.tile(p, (num_horizon_points, 1))
-                    ee_vel_ref = np.tile(v, (num_horizon_points, 1))
+                    if v is not None:
+                        ee_vel_ref = np.tile(v, (num_horizon_points, 1))
 
         return {
             "base_pose": base_pose_ref,

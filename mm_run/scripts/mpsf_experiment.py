@@ -1,0 +1,684 @@
+import argparse
+import datetime
+import logging
+import time
+
+import numpy as np
+from scipy.interpolate import interp1d
+from scipy.spatial.transform import Rotation as Rot
+
+import mm_control.MPC as MPC
+from mm_plan.TaskManager import TaskManager
+from mm_simulator import simulation
+from mm_utils import parsing
+
+
+def compute_jerkiness(velocities, dt):
+    """Compute jerkiness metric as the rate of change of velocity commands.
+
+    Args:
+        velocities (np.ndarray): Velocity commands, shape (N, nu).
+        dt (float): Time step in seconds.
+
+    Returns:
+        float: Jerkiness metric. Returns 0.0 if len(velocities) < 2.
+    """
+    if len(velocities) < 2:
+        return 0.0
+    velocity_changes = np.diff(velocities, axis=0)
+    jerkiness = np.mean(np.linalg.norm(velocity_changes, axis=1)) / dt
+    return jerkiness
+
+
+def compute_rmse(actual, reference, mask=None):
+    """Compute Root Mean Square Error between actual and reference.
+
+    Args:
+        actual (np.ndarray): Actual values, shape (N, dim) or (dim,).
+        reference (np.ndarray): Reference values, shape (N, dim) or (dim,).
+        mask (np.ndarray, optional): Mask to apply, shape (dim,). Defaults to None.
+
+    Returns:
+        float: RMSE value. Returns 0.0 if actual or reference is None.
+    """
+    if actual is None or reference is None:
+        return 0.0
+
+    # Handle 1D case
+    if actual.ndim == 1:
+        actual = actual.reshape(1, -1)
+    if reference.ndim == 1:
+        reference = reference.reshape(1, -1)
+
+    # Ensure same shape
+    min_len = min(len(actual), len(reference))
+    actual = actual[:min_len]
+    reference = reference[:min_len]
+
+    # Apply mask if provided
+    if mask is not None:
+        actual = actual * mask
+        reference = reference * mask
+
+    errors = actual - reference
+    mse = np.mean(errors**2)
+    rmse = np.sqrt(mse)
+    return rmse
+
+
+def compute_corrections(desired_vel, actual_vel, mask=None):
+    """Compute corrections as norm of difference between desired and actual velocity.
+
+    Args:
+        desired_vel (np.ndarray): Desired velocity, shape (dim,) or (N, dim).
+        actual_vel (np.ndarray): Actual velocity, shape (dim,) or (N, dim).
+        mask (np.ndarray, optional): Mask to apply, shape (dim,). Defaults to None.
+
+    Returns:
+        float: L2 norm of corrections. Returns 0.0 if desired_vel or actual_vel is None.
+    """
+    if desired_vel is None or actual_vel is None:
+        return 0.0
+
+    # Handle 1D case
+    if desired_vel.ndim == 1:
+        desired_vel = desired_vel.reshape(1, -1)
+    if actual_vel.ndim == 1:
+        actual_vel = actual_vel.reshape(1, -1)
+
+    # Apply mask if provided
+    if mask is not None:
+        desired_vel = desired_vel * mask
+        actual_vel = actual_vel * mask
+
+    corrections = desired_vel - actual_vel
+    return np.linalg.norm(corrections)
+
+
+def parse_args():
+    """Parse command line arguments.
+
+    Returns:
+        argparse.Namespace: Parsed arguments with config, ctrl_config,
+            planner_config, and GUI attributes.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-c", "--config", required=True, help="Path to configuration file."
+    )
+    parser.add_argument(
+        "--ctrl_config",
+        type=str,
+        default="default",
+        help="Controller config. Overwrites yaml settings if not 'default'",
+    )
+    parser.add_argument(
+        "--planner_config",
+        type=str,
+        default="default",
+        help="Planner config. Overwrites yaml settings if not 'default'",
+    )
+    parser.add_argument("--GUI", action="store_true", help="Enable Pybullet GUI")
+    return parser.parse_args()
+
+
+def load_config(args):
+    """Load and merge configuration files.
+
+    Args:
+        args (argparse.Namespace): Parsed command line arguments.
+
+    Returns:
+        dict: Merged configuration dictionary.
+    """
+    config = parsing.load_config(args.config)
+
+    if args.ctrl_config != "default":
+        ctrl_config = parsing.load_config(args.ctrl_config)
+        config = parsing.recursive_dict_update(config, ctrl_config)
+
+    if args.planner_config != "default":
+        planner_config = parsing.load_config(args.planner_config)
+        config = parsing.recursive_dict_update(config, planner_config)
+
+    if args.GUI:
+        config["simulation"]["gui"] = True
+
+    return config
+
+
+def setup_experiment(config):
+    """Initialize simulator, controller, and task manager.
+
+    Args:
+        config (dict): Configuration dictionary.
+
+    Returns:
+        tuple: (sim, controller, task_manager, ctrl_config, sim_config).
+    """
+    # Setup basic logging for controllers and planners
+    log_level = config.get("logging", {}).get("log_level", logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+
+    for logger_name in ["Controller", "Planner", "Simulator"]:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(log_level)
+        if not logger.handlers:  # Avoid duplicate handlers
+            logger.addHandler(handler)
+
+    sim_config = config["simulation"]
+    ctrl_config = config["controller"]
+    planner_config = config.get("planner", None)
+
+    # Simulator
+    sim = simulation.BulletSimulation(
+        config=sim_config, timestamp=datetime.datetime.now(), cli_args=None
+    )
+
+    # Controller
+    control_class = getattr(MPC, ctrl_config["type"], None)
+    if control_class is None:
+        raise ValueError(f"Unknown controller type: {ctrl_config['type']}")
+    controller = control_class(ctrl_config)
+
+    # Task Manager
+    task_manager = TaskManager(planner_config)
+    task_manager.activatePlanners()
+
+    print(f"Starting simulation: duration={sim.duration}s, timestep={sim.timestep}s")
+
+    return sim, controller, task_manager, ctrl_config, sim_config
+
+
+def compute_velocity_command(
+    u, u_bar, v_bar, cmd_vel_type, sim_timestep, controller_dt
+):
+    """Compute velocity command from controller output.
+
+    Args:
+        u (np.ndarray): Current velocity command, shape (nu,).
+        u_bar (np.ndarray): Control input, shape (N+1, nu) or (nu,).
+        v_bar (np.ndarray): Velocity trajectory, shape (N+1, nu).
+        cmd_vel_type (str): "integration" or "interpolation".
+        sim_timestep (float): Simulation timestep in seconds.
+        controller_dt (float): Controller timestep in seconds.
+
+    Returns:
+        np.ndarray: Computed velocity command, shape (nu,).
+    """
+    if cmd_vel_type == "integration":
+        return u + u_bar[0] * sim_timestep
+    elif cmd_vel_type == "interpolation":
+        N = v_bar.shape[0]
+        t_v_bar = np.arange(N) * controller_dt
+        v_interp = interp1d(
+            t_v_bar, v_bar, axis=0, bounds_error=False, fill_value="extrapolate"
+        )
+        return v_interp(sim_timestep)
+    else:
+        raise ValueError(f"Unknown cmd_vel_type: {cmd_vel_type}")
+
+
+def extract_robot_states(robot, robot_states):
+    """Extract base and end-effector pose and velocity from robot states.
+
+    Args:
+        robot: Robot instance with link_pose() and link_velocity() methods.
+        robot_states (tuple): (joint_positions, joint_velocities) from robot.joint_states().
+
+    Returns:
+        dict: Dictionary with "base" and "EE" keys, each containing "pose" and
+            "velocity" arrays. Base pose/vel shape (3,), EE pose/vel shape (6,).
+    """
+    ee_curr_pos, ee_cur_orn = robot.link_pose()
+    ee_euler = Rot.from_quat(ee_cur_orn).as_euler("xyz")
+    ee_pose = np.hstack([ee_curr_pos, ee_euler])
+
+    ee_lin_vel, ee_ang_vel = robot.link_velocity()
+    ee_vel = np.hstack([ee_lin_vel, ee_ang_vel])
+
+    base_pose = robot_states[0][:3]
+    base_vel = robot_states[1][:3]
+
+    return {
+        "base": {"pose": base_pose, "velocity": base_vel},
+        "EE": {"pose": ee_pose, "velocity": ee_vel},
+    }
+
+
+def get_constraint_violations(controller):
+    """Extract constraint violations from controller log and evaluate state/control constraints.
+
+    Args:
+        controller: Controller instance with log, collision_link_names, x_bar, u_bar,
+            and evaluate_constraints method.
+
+    Returns:
+        dict: Dictionary with constraint names as keys. Values are dicts with:
+            - "max": Maximum violation value
+            - "violations": Number of timesteps with violation > 1e-6
+            - "max_per_dim" (optional): Per-dimension max violations for state/control
+    """
+    violations = {}
+    violation_threshold = 1e-6
+
+    # Collision constraints from log
+    for name in controller.collision_link_names:
+        constraint_key = "_".join([name, "constraint"])
+        constraint_vals = controller.log.get(constraint_key)
+        if (
+            constraint_vals
+            and isinstance(constraint_vals, list)
+            and len(constraint_vals) > 0
+        ):
+            # Each element in constraint_vals is a timestep
+            all_values = []
+            timesteps_with_violation = 0
+            for v in constraint_vals:
+                # Convert CasADi objects to numpy arrays
+                if hasattr(v, "full"):
+                    v = v.full()
+                if not isinstance(v, np.ndarray):
+                    v = np.array(v)
+
+                v_flat = v.flatten()
+                all_values.extend(v_flat)
+                if np.any(v_flat > violation_threshold):
+                    timesteps_with_violation += 1
+
+            # Max value (closest to boundary, can be negative if satisfied)
+            max_value = np.max(all_values) if all_values else 0.0
+
+            violations[name] = {
+                "max": max_value,
+                "violations": timesteps_with_violation,
+            }
+
+    # State constraints - evaluate from x_bar if available
+    if (
+        hasattr(controller, "stateCst")
+        and hasattr(controller, "x_bar")
+        and hasattr(controller, "u_bar")
+    ):
+        try:
+            # Get parameter map (empty for state constraints)
+            nlp_p_map_bar = controller.log.get("ocp_param", [])
+            if not nlp_p_map_bar:
+                # Create empty parameter maps
+                nlp_p_map_bar = [{}] * (controller.N + 1)
+
+            state_vals = controller.evaluate_constraints(
+                controller.stateCst, controller.x_bar, controller.u_bar, nlp_p_map_bar
+            )
+
+            if state_vals and len(state_vals) > 0:
+                # state_vals is list of arrays, each shape (2*nx,) for [x - ub, lb - x]
+                # Each element is a timestep
+                nx = controller.robot.ssSymMdl["nx"]
+                all_values = []
+                timesteps_with_violation = 0
+                per_dim_max = np.full(
+                    nx, -np.inf
+                )  # Start with -inf to get max correctly
+
+                for v in state_vals:
+                    # Convert CasADi objects to numpy arrays
+                    if hasattr(v, "full"):
+                        v = v.full()
+                    v_arr = np.array(v).flatten()
+                    all_values.extend(v_arr)
+
+                    # Check if this timestep has any violation
+                    if np.any(v_arr > violation_threshold):
+                        timesteps_with_violation += 1
+
+                    # First nx are (x - ub), last nx are (lb - x)
+                    # Take max of both for each dimension (closest to boundary)
+                    upper_values = v_arr[:nx]
+                    lower_values = v_arr[nx:]
+                    per_dim_max = np.maximum(
+                        per_dim_max, np.maximum(upper_values, lower_values)
+                    )
+
+                # Max value (closest to boundary, can be negative if satisfied)
+                max_value = np.max(all_values) if all_values else 0.0
+
+                violations["state"] = {
+                    "max": max_value,
+                    "violations": timesteps_with_violation,
+                    "max_per_dim": per_dim_max,
+                }
+        except Exception:
+            pass  # Skip if evaluation fails
+
+    # Control constraints - evaluate from u_bar if available
+    if (
+        hasattr(controller, "controlCst")
+        and hasattr(controller, "x_bar")
+        and hasattr(controller, "u_bar")
+    ):
+        try:
+            nlp_p_map_bar = controller.log.get("ocp_param", [])
+            if not nlp_p_map_bar:
+                nlp_p_map_bar = [{}] * (controller.N + 1)
+
+            control_vals = controller.evaluate_constraints(
+                controller.controlCst, controller.x_bar, controller.u_bar, nlp_p_map_bar
+            )
+
+            if control_vals and len(control_vals) > 0:
+                # Each element is a timestep
+                nu = controller.robot.ssSymMdl["nu"]
+                all_values = []
+                timesteps_with_violation = 0
+                per_dim_max = np.full(
+                    nu, -np.inf
+                )  # Start with -inf to get max correctly
+
+                for v in control_vals:
+                    # Convert CasADi objects to numpy arrays
+                    if hasattr(v, "full"):
+                        v = v.full()
+                    v_arr = np.array(v).flatten()
+                    all_values.extend(v_arr)
+
+                    # Check if this timestep has any violation
+                    if np.any(v_arr > violation_threshold):
+                        timesteps_with_violation += 1
+
+                    upper_values = v_arr[:nu]
+                    lower_values = v_arr[nu:]
+                    per_dim_max = np.maximum(
+                        per_dim_max, np.maximum(upper_values, lower_values)
+                    )
+
+                # Max value (closest to boundary, can be negative if satisfied)
+                max_value = np.max(all_values) if all_values else 0.0
+
+                violations["control"] = {
+                    "max": max_value,
+                    "violations": timesteps_with_violation,
+                    "max_per_dim": per_dim_max,
+                }
+        except Exception:
+            pass  # Skip if evaluation fails
+
+    return violations
+
+
+def update_metrics(
+    mpsf_metrics,
+    references,
+    states,
+    u,
+    u_prev,
+    desired_base_vel,
+    desired_ee_vel,
+    controller,
+    sim_timestep,
+):
+    """Update MPSF metrics dictionary with current timestep data.
+
+    Args:
+        mpsf_metrics (dict): Dictionary with metric lists to append to.
+        references (dict): Reference trajectories with optional "base_pose" and
+            "ee_pose" keys, shape (N+1, dim).
+        states (dict): Current robot states from extract_robot_states().
+        u (np.ndarray): Current velocity command, shape (nu,).
+        u_prev (np.ndarray): Previous velocity command, shape (nu,).
+        desired_base_vel (np.ndarray or None): Desired base velocity, shape (3,).
+        desired_ee_vel (np.ndarray or None): Desired EE velocity, shape (6,).
+        controller: Controller instance with mask attributes and log.
+        sim_timestep (float): Simulation timestep in seconds.
+    """
+    # Corrections
+    if desired_base_vel is not None:
+        correction = compute_corrections(
+            desired_base_vel, u[:3], controller.mpsf_base_mask
+        )
+        mpsf_metrics["base_corrections"].append(correction)
+
+    if desired_ee_vel is not None:
+        correction = compute_corrections(desired_ee_vel, u[3:], controller.mpsf_ee_mask)
+        mpsf_metrics["ee_corrections"].append(correction)
+
+    # RMSE
+    base_pose_ref = references.get("base_pose")
+    if base_pose_ref is not None:
+        base_rmse = compute_rmse(
+            states["base"]["pose"], base_pose_ref[0], controller.base_mask
+        )
+        mpsf_metrics["base_rmses"].append(base_rmse)
+
+    ee_pose_ref = references.get("ee_pose")
+    if ee_pose_ref is not None:
+        ee_rmse = compute_rmse(states["EE"]["pose"], ee_pose_ref[0], controller.ee_mask)
+        mpsf_metrics["ee_rmses"].append(ee_rmse)
+
+    # Jerkiness
+    jerkiness = compute_jerkiness(np.vstack([u_prev, u]), sim_timestep)
+    mpsf_metrics["jerks"].append(jerkiness)
+
+    # Control effort (L2 norm of velocity command)
+    control_effort = np.linalg.norm(u)
+    mpsf_metrics["control_efforts"].append(control_effort)
+
+    # Constraint violations
+    violations = get_constraint_violations(controller)
+    mpsf_metrics["constraint_violations"].append(violations)
+
+
+def run_simulation(
+    sim,
+    controller,
+    task_manager,
+    ctrl_config,
+    sim_config,
+    desired_base_vel,
+    desired_ee_vel,
+):
+    """Run the main simulation loop and collect MPSF metrics.
+
+    Args:
+        sim (simulation.BulletSimulation): Simulation environment.
+        controller: Controller instance with control(), N, dt, and mask attributes.
+        task_manager (TaskManager): Task manager with getReferences() and update().
+        ctrl_config (dict): Controller configuration with "cmd_vel_type" key.
+        sim_config (dict): Simulation configuration with "robot" -> "dims" -> "v".
+        desired_base_vel (np.ndarray or None): Desired base velocity, shape (3,).
+        desired_ee_vel (np.ndarray or None): Desired EE velocity, shape (6,).
+
+    Returns:
+        dict: Dictionary with keys "base_corrections", "ee_corrections",
+            "base_rmses", "ee_rmses", "jerks", "control_efforts",
+            "constraint_violations".
+    """
+    robot = sim.robot
+    t = 0.0
+    u = np.zeros(sim_config["robot"]["dims"]["v"])
+    u_prev = u.copy()
+
+    mpsf_metrics = {
+        "base_corrections": [],
+        "ee_corrections": [],
+        "base_rmses": [],
+        "ee_rmses": [],
+        "jerks": [],
+        "control_efforts": [],
+        "constraint_violations": [],
+    }
+
+    while t <= sim.duration:
+        robot_states = robot.joint_states(add_noise=False)
+        references = task_manager.getReferences(
+            t, robot_states, controller.N + 1, controller.dt
+        )
+
+        # Add desired velocities for MPSF
+        if desired_base_vel is not None or desired_ee_vel is not None:
+            references["desired_velocity"] = {
+                "base_velocity": desired_base_vel,
+                "ee_velocity": desired_ee_vel,
+            }
+
+        # Control
+        v_bar, u_bar = controller.control(t, robot_states, references)
+
+        # Compute velocity command
+        u = compute_velocity_command(
+            u, u_bar, v_bar, ctrl_config["cmd_vel_type"], sim.timestep, controller.dt
+        )
+
+        robot.command_velocity(u)
+        t, _ = sim.step(t)
+
+        # Extract states
+        states = extract_robot_states(robot, robot_states)
+        task_manager.update(
+            t, states, base_mask=controller.base_mask, ee_mask=controller.ee_mask
+        )
+
+        # Update metrics
+        update_metrics(
+            mpsf_metrics,
+            references,
+            states,
+            u,
+            u_prev,
+            desired_base_vel,
+            desired_ee_vel,
+            controller,
+            sim.timestep,
+        )
+        u_prev = u.copy()
+
+        time.sleep(sim.timestep)
+
+    return mpsf_metrics
+
+
+def print_metrics(mpsf_metrics):
+    """Print formatted summary of MPSF experiment metrics.
+
+    Args:
+        mpsf_metrics (dict): Dictionary of collected metrics from run_simulation().
+    """
+    print("\n" + "=" * 80)
+    print("MPSF EXPERIMENT METRICS SUMMARY")
+    print("=" * 80)
+
+    # RMSE
+    if mpsf_metrics["base_rmses"]:
+        print(f"Base Pose RMSE (average): {np.mean(mpsf_metrics['base_rmses']):.4f}")
+    else:
+        print("Base Pose RMSE: N/A (no base pose references)")
+
+    if mpsf_metrics["ee_rmses"]:
+        print(f"EE Pose RMSE (average): {np.mean(mpsf_metrics['ee_rmses']):.4f}")
+    else:
+        print("EE Pose RMSE: N/A (no EE pose references)")
+
+    # Corrections
+    if mpsf_metrics["base_corrections"]:
+        print(f"Mean Base Corrections: {np.mean(mpsf_metrics['base_corrections']):.4f}")
+        print(
+            f"Max Base Correction: {np.max(mpsf_metrics['base_corrections']):.4f} m/s"
+        )
+    if mpsf_metrics["ee_corrections"]:
+        print(f"Mean EE Corrections: {np.mean(mpsf_metrics['ee_corrections']):.4f}")
+        print(f"Max EE Correction: {np.max(mpsf_metrics['ee_corrections']):.4f} m/s")
+
+    # Jerkiness
+    if mpsf_metrics["jerks"]:
+        print(f"Mean Jerkiness: {np.mean(mpsf_metrics['jerks']):.4f} m/s³")
+
+    # Control effort
+    if mpsf_metrics["control_efforts"]:
+        print(
+            f"Mean Control Effort: {np.mean(mpsf_metrics['control_efforts']):.4f} m/s/s"
+        )
+        print(
+            f"Max Control Effort: {np.max(mpsf_metrics['control_efforts']):.4f} m/s/s"
+        )
+
+    # Constraint violations
+    if any(mpsf_metrics["constraint_violations"]):
+        print("\nConstraint Violations Summary:")
+        all_names = set()
+        for violations in mpsf_metrics["constraint_violations"]:
+            all_names.update(violations.keys())
+
+        for name in sorted(all_names):
+            # Collect all violations for this constraint across all timesteps
+            constraint_data = [
+                v.get(name)
+                for v in mpsf_metrics["constraint_violations"]
+                if name in v and isinstance(v.get(name), dict)
+            ]
+
+            if not constraint_data:
+                continue
+
+            # Get max across all timesteps
+            max_v = max([d.get("max", 0.0) for d in constraint_data])
+            # Count how many simulation timesteps had violations
+            timesteps_with_violation = sum(
+                [1 for d in constraint_data if d.get("violations", 0) > 0]
+            )
+            total_steps = len(constraint_data)
+
+            # Check if per-dimension data exists
+            has_per_dim = any("max_per_dim" in d for d in constraint_data)
+
+            if has_per_dim:
+                # Get max per dimension across all timesteps
+                per_dim_arrays = [
+                    d.get("max_per_dim") for d in constraint_data if "max_per_dim" in d
+                ]
+                if per_dim_arrays:
+                    per_dim_max = np.max(per_dim_arrays, axis=0)
+                    per_dim_str = ", ".join([f"{v:.4f}" for v in per_dim_max])
+                    print(
+                        f"  {name}: max={max_v:.6f}, violations={timesteps_with_violation}/{total_steps}, per_dim_max=[{per_dim_str}]"
+                    )
+                else:
+                    print(
+                        f"  {name}: max={max_v:.6f}, violations={timesteps_with_violation}/{total_steps}"
+                    )
+            else:
+                print(
+                    f"  {name}: max={max_v:.6f}, violations={timesteps_with_violation}/{total_steps}"
+                )
+
+    print("=" * 80 + "\n")
+
+
+def main():
+    """Main entry point for MPSF experiment script."""
+    np.set_printoptions(precision=3, suppress=True)
+
+    args = parse_args()
+    config = load_config(args)
+    sim, controller, task_manager, ctrl_config, sim_config = setup_experiment(config)
+
+    # MPSF desired velocities (can be set from teleop or other sources)
+    desired_base_velocity = np.array([0, 0, 0])
+    desired_ee_velocity = np.array([0.2, -0.2, 0, 0, 0, 0])
+
+    mpsf_metrics = run_simulation(
+        sim,
+        controller,
+        task_manager,
+        ctrl_config,
+        sim_config,
+        desired_base_velocity,
+        desired_ee_velocity,
+    )
+    print_metrics(mpsf_metrics)
+
+
+if __name__ == "__main__":
+    main()
