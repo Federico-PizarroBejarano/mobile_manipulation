@@ -7,7 +7,12 @@ import numpy as np
 
 from mm_utils import parsing
 from mm_utils.enums import RefType
-from mm_utils.math import interpolate, wrap_pi_array, wrap_pi_scalar
+from mm_utils.math import (
+    compute_base_pose_errors,
+    compute_ee_pose_errors,
+    interpolate,
+    normalize_mask,
+)
 
 
 class Planner(ABC):
@@ -224,37 +229,22 @@ class WaypointPlanner(Planner):
         Returns:
             bool: True if waypoint has been reached, False otherwise.
         """
-        # Default masks: all True if not provided
-        if base_mask is None:
-            base_mask = np.ones(3, dtype=bool)
-        else:
-            base_mask = np.array(base_mask, dtype=bool)
-        if ee_mask is None:
-            ee_mask = np.ones(6, dtype=bool)
-        else:
-            ee_mask = np.array(ee_mask, dtype=bool)
-
+        base_mask = normalize_mask(base_mask, dim=3)
+        ee_mask = normalize_mask(ee_mask, dim=6)
         base_finished = True
         ee_finished = True
 
         # Check base if applicable
         if self.has_base_ref:
             base_pose = states["base"]["pose"]
+            pos_err, yaw_err, pos_within_tol, ori_within_tol = compute_base_pose_errors(
+                base_pose,
+                self.base_target,
+                base_mask,
+                self.tracking_pos_err_tol,
+                self.tracking_ori_err_tol,
+            )
 
-            # Check position (x, y) only if mask indicates it matters
-            pos_mask = base_mask[:2]
-            pos_err = np.linalg.norm((base_pose[:2] - self.base_target[:2])[pos_mask])
-            pos_within_tol = pos_err < self.tracking_pos_err_tol
-
-            # Check orientation (yaw) only if mask indicates it matters
-            if base_mask[2]:
-                yaw_err = abs(wrap_pi_scalar(base_pose[2] - self.base_target[2]))
-                ori_within_tol = yaw_err < self.tracking_ori_err_tol
-            else:
-                ori_within_tol = True
-                yaw_err = 0.0
-
-            # Print base position and orientation error (masked)
             self.py_logger.debug(
                 f"{self.name} base pos_err: {pos_err:.5f}, yaw_err: {yaw_err:.5f}"
             )
@@ -276,19 +266,14 @@ class WaypointPlanner(Planner):
         # Check EE if applicable
         if self.has_ee_ref:
             ee_pose = states["EE"]["pose"]
+            pos_err, ori_err, pos_within_tol, ori_within_tol = compute_ee_pose_errors(
+                ee_pose,
+                self.ee_target,
+                ee_mask,
+                self.tracking_pos_err_tol,
+                self.tracking_ori_err_tol,
+            )
 
-            # Check position (x, y, z) only if mask indicates it matters
-            pos_mask = ee_mask[:3]
-            pos_err = np.linalg.norm((ee_pose[:3] - self.ee_target[:3])[pos_mask])
-            pos_within_tol = pos_err < self.tracking_pos_err_tol
-
-            # Check orientation (roll, pitch, yaw) only if mask indicates it matters
-            ori_mask = ee_mask[3:]
-            ori_diff = wrap_pi_array(ee_pose[3:] - self.ee_target[3:])
-            ori_err = np.linalg.norm(ori_diff[ori_mask])
-            ori_within_tol = ori_err < self.tracking_ori_err_tol
-
-            # Print EE position and orientation error (masked)
             self.py_logger.debug(
                 f"{self.name} ee pos_err: {pos_err:.5f}, ori_err: {ori_err:.5f}"
             )
@@ -498,16 +483,8 @@ class PathPlanner(Planner):
         Returns:
             bool: True if path has been completed, False otherwise.
         """
-        # Default masks: all True if not provided
-        if base_mask is None:
-            base_mask = np.ones(3, dtype=bool)
-        else:
-            base_mask = np.array(base_mask, dtype=bool)
-        if ee_mask is None:
-            ee_mask = np.ones(6, dtype=bool)
-        else:
-            ee_mask = np.array(ee_mask, dtype=bool)
-
+        base_mask = normalize_mask(base_mask, dim=3)
+        ee_mask = normalize_mask(ee_mask, dim=6)
         base_finished = True
         ee_finished = True
 
@@ -517,17 +494,13 @@ class PathPlanner(Planner):
             base_vel = states["base"].get("velocity")
             end_pose = self.base_plan["p"][-1]
 
-            # Apply mask to error computation
-            pos_mask = base_mask[:2]
-            pos_err = np.linalg.norm((base_pose[:2] - end_pose[:2])[pos_mask])
-            pos_cond = pos_err < self.tracking_pos_err_tol
-
-            # Check orientation only if mask indicates it matters
-            if base_mask[2]:
-                yaw_err = abs(wrap_pi_scalar(base_pose[2] - end_pose[2]))
-                ori_cond = yaw_err < self.tracking_ori_err_tol
-            else:
-                ori_cond = True
+            _, _, pos_cond, ori_cond = compute_base_pose_errors(
+                base_pose,
+                end_pose,
+                base_mask,
+                self.tracking_pos_err_tol,
+                self.tracking_ori_err_tol,
+            )
 
             pos_ori_cond = pos_cond and ori_cond
             vel_cond = base_vel is not None and np.linalg.norm(base_vel) < 1e-2
@@ -545,16 +518,13 @@ class PathPlanner(Planner):
             ee_vel = states["EE"].get("velocity")
             end_pose = self.ee_plan["p"][-1]
 
-            # Apply mask to error computation
-            pos_mask = ee_mask[:3]
-            pos_err = np.linalg.norm((ee_pose[:3] - end_pose[:3])[pos_mask])
-            pos_cond = pos_err < self.tracking_pos_err_tol
-
-            # Check orientation only if mask indicates it matters
-            ori_mask = ee_mask[3:]
-            ori_diff = wrap_pi_array(ee_pose[3:] - end_pose[3:])
-            ori_err = np.linalg.norm(ori_diff[ori_mask])
-            ori_cond = ori_err < self.tracking_ori_err_tol
+            _, _, pos_cond, ori_cond = compute_ee_pose_errors(
+                ee_pose,
+                end_pose,
+                ee_mask,
+                self.tracking_pos_err_tol,
+                self.tracking_ori_err_tol,
+            )
 
             pos_ori_cond = pos_cond and ori_cond
             vel_cond = ee_vel is not None and np.linalg.norm(ee_vel) < 1e-2

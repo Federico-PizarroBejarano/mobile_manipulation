@@ -11,6 +11,12 @@ import mm_control.MPC as MPC
 from mm_plan.TaskManager import TaskManager
 from mm_simulator import simulation
 from mm_utils import parsing
+from mm_utils.math import (
+    compute_base_pose_errors,
+    compute_ee_pose_errors,
+    normalize_mask,
+    wrap_pi_scalar,
+)
 
 
 def compute_jerkiness(velocities, dt):
@@ -426,7 +432,7 @@ def update_metrics(
         mpsf_metrics (dict): Dictionary with metric lists to append to.
         references (dict): Reference trajectories with optional "base_pose" and
             "ee_pose" keys, shape (N+1, dim).
-        states (dict): Current robot states from extract_robot_states().
+        states (dict): Current robot states.
         u (np.ndarray): Current velocity command, shape (nu,).
         u_prev (np.ndarray): Previous velocity command, shape (nu,).
         desired_base_vel (np.ndarray or None): Desired base velocity, shape (3,).
@@ -477,8 +483,6 @@ def run_simulation(
     task_manager,
     ctrl_config,
     sim_config,
-    desired_base_vel,
-    desired_ee_vel,
 ):
     """Run the main simulation loop and collect MPSF metrics.
 
@@ -488,8 +492,6 @@ def run_simulation(
         task_manager (TaskManager): Task manager with getReferences() and update().
         ctrl_config (dict): Controller configuration with "cmd_vel_type" key.
         sim_config (dict): Simulation configuration with "robot" -> "dims" -> "v".
-        desired_base_vel (np.ndarray or None): Desired base velocity, shape (3,).
-        desired_ee_vel (np.ndarray or None): Desired EE velocity, shape (6,).
 
     Returns:
         dict: Dictionary with keys "base_corrections", "ee_corrections",
@@ -511,10 +513,22 @@ def run_simulation(
         "constraint_violations": [],
     }
 
+    # Goal position in world frame
+    base_goal = np.array([1.5, 0.4, 0])
+    ee_goal = np.array([2.5, 0.4, 0.7, -1.627, -1.567, -1.516])
+
+    # Initial state
+    robot_states = robot.joint_states(add_noise=False)
+    states = extract_robot_states(robot, robot_states)
+
     while t <= sim.duration:
         robot_states = robot.joint_states(add_noise=False)
         references = task_manager.getReferences(
             t, robot_states, controller.N + 1, controller.dt
+        )
+
+        desired_base_vel, desired_ee_vel = calculate_desired_velocity(
+            base_goal, ee_goal, states
         )
 
         # Add desired velocities for MPSF
@@ -541,6 +555,27 @@ def run_simulation(
             t, states, base_mask=controller.base_mask, ee_mask=controller.ee_mask
         )
 
+        # Normalize masks and compute errors using utility functions
+        mpsf_base_mask = normalize_mask(controller.mpsf_base_mask, dim=3)
+        mpsf_ee_mask = normalize_mask(controller.mpsf_ee_mask, dim=6)
+        base_pos_err, base_yaw_err, _, _ = compute_base_pose_errors(
+            states["base"]["pose"], base_goal, mpsf_base_mask, 0, 0
+        )
+        ee_pos_err, ee_ori_err, _, _ = compute_ee_pose_errors(
+            states["EE"]["pose"], ee_goal, mpsf_ee_mask, 0, 0
+        )
+
+        print(
+            "EXPERIMENT - ",
+            f"Base Pos Error: {base_pos_err:.4f} | ",
+            f"Base Yaw Error: {base_yaw_err:.4f}",
+        )
+        print(
+            "EXPERIMENT - ",
+            f"EE Pos Error: {ee_pos_err:.4f} | ",
+            f"EE Orientation Error: {ee_ori_err:.4f}",
+        )
+
         # Update metrics
         update_metrics(
             mpsf_metrics,
@@ -558,6 +593,39 @@ def run_simulation(
         time.sleep(sim.timestep)
 
     return mpsf_metrics
+
+
+def calculate_desired_velocity(base_goal, ee_goal, states):
+    """Calculate desired base and EE velocity from goal positions and robot states.
+
+    Args:
+        base_goal (np.ndarray): Goal base position in world frame, shape (3,).
+        ee_goal (np.ndarray): Goal EE position in world frame, shape (6,).
+        states (dict): Current robot states.
+
+    Returns:
+        tuple: (desired_base_vel, desired_ee_vel) where each is a (3,) or (6,) array.
+    """
+
+    # Gain constants
+    k_base = np.array([0.5, 0.5, 0.25])
+    k_ee = np.array([0.5, 0.5, 0.5, 0.25, 0.25, 0.25])
+
+    # Calculate base velocity
+    base_vel = base_goal - states["base"]["pose"]
+    base_vel[-1] = wrap_pi_scalar(base_vel[-1])
+    base_vel = k_base * base_vel
+
+    # Calculate EE velocity
+    ee_vel = ee_goal - states["EE"]["pose"]
+    R_goal = Rot.from_euler("xyz", ee_goal[3:]).as_matrix()
+    R_curr = Rot.from_euler("xyz", states["EE"]["pose"][3:]).as_matrix()
+    R_error = R_goal @ R_curr.T
+    rotvec = Rot.from_matrix(R_error).as_rotvec()
+    ee_vel[3:] = rotvec
+    ee_vel = k_ee * ee_vel
+
+    return base_vel, ee_vel
 
 
 def print_metrics(mpsf_metrics):
@@ -664,18 +732,12 @@ def main():
     config = load_config(args)
     sim, controller, task_manager, ctrl_config, sim_config = setup_experiment(config)
 
-    # MPSF desired velocities (can be set from teleop or other sources)
-    desired_base_velocity = np.array([0, 0, 0])
-    desired_ee_velocity = np.array([0.2, -0.2, 0, 0, 0, 0])
-
     mpsf_metrics = run_simulation(
         sim,
         controller,
         task_manager,
         ctrl_config,
         sim_config,
-        desired_base_velocity,
-        desired_ee_velocity,
     )
     print_metrics(mpsf_metrics)
 

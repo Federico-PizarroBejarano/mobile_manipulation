@@ -24,7 +24,7 @@ controller:
     name: "TestOrientationTracking"
 
 simulation:
-  duration: 6
+  duration: 4
 
 include:
   - package: "mm_run"
