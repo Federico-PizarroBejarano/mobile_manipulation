@@ -255,21 +255,23 @@ def extract_robot_states(robot, robot_states):
     }
 
 
-def get_constraint_violations(controller):
-    """Extract constraint violations from controller log and evaluate state/control constraints.
+def get_constraint_violations(controller, robot_states):
+    """Extract constraint violations from measured robot states and controller log.
 
     Args:
-        controller: Controller instance with log, collision_link_names, x_bar, u_bar,
-            and evaluate_constraints method.
+        controller: Controller instance with log, collision_link_names, and robot attributes.
+        robot_states (tuple): (q, v) tuple from robot.joint_states(), where q is positions
+            and v is velocities.
 
     Returns:
         dict: Dictionary with constraint names as keys. Values are dicts with:
             - "max": Maximum violation value
-            - "violations": Number of timesteps with violation > 1e-6
+            - "violations": Number of timesteps with violation > threshold
             - "max_per_dim" (optional): Per-dimension max violations for state/control
     """
     violations = {}
-    violation_threshold = 1e-6
+    violation_threshold = 1e-3  # 1mm or 0.001rad for measured violations
+    collision_violation_threshold = 1e-3
 
     # Collision constraints from log
     for name in controller.collision_link_names:
@@ -292,7 +294,7 @@ def get_constraint_violations(controller):
 
                 v_flat = v.flatten()
                 all_values.extend(v_flat)
-                if np.any(v_flat > violation_threshold):
+                if np.any(v_flat > collision_violation_threshold):
                     timesteps_with_violation += 1
 
             # Max value (closest to boundary, can be negative if satisfied)
@@ -303,64 +305,41 @@ def get_constraint_violations(controller):
                 "violations": timesteps_with_violation,
             }
 
-    # State constraints - evaluate from x_bar if available
-    if (
-        hasattr(controller, "stateCst")
-        and hasattr(controller, "x_bar")
-        and hasattr(controller, "u_bar")
-    ):
-        try:
-            # Get parameter map (empty for state constraints)
-            nlp_p_map_bar = controller.log.get("ocp_param", [])
-            if not nlp_p_map_bar:
-                # Create empty parameter maps
-                nlp_p_map_bar = [{}] * (controller.N + 1)
+    # Measured state constraints - evaluate from actual robot states
+    q_meas, v_meas = robot_states
+    q_meas_wrapped = q_meas.copy()
+    for i in range(2, len(q_meas)):  # Wrap revolute joints (base yaw + arm joints)
+        q_meas_wrapped[i] = wrap_pi_scalar(q_meas[i])
+    x_meas = np.hstack([q_meas_wrapped, v_meas])
 
-            state_vals = controller.evaluate_constraints(
-                controller.stateCst, controller.x_bar, controller.u_bar, nlp_p_map_bar
-            )
+    # Compute violations: positive means violation
+    vio_upper = x_meas - controller.robot.ub_x
+    vio_lower = controller.robot.lb_x - x_meas
+    vio_per_dim = np.maximum(vio_upper, vio_lower)
 
-            if state_vals and len(state_vals) > 0:
-                # state_vals is list of arrays, each shape (2*nx,) for [x - ub, lb - x]
-                # Each element is a timestep
-                nx = controller.robot.ssSymMdl["nx"]
-                all_values = []
-                timesteps_with_violation = 0
-                per_dim_max = np.full(
-                    nx, -np.inf
-                )  # Start with -inf to get max correctly
+    max_vio = float(np.max(vio_per_dim)) if vio_per_dim.size else 0.0
+    has_violation = max_vio > violation_threshold
 
-                for v in state_vals:
-                    # Convert CasADi objects to numpy arrays
-                    if hasattr(v, "full"):
-                        v = v.full()
-                    v_arr = np.array(v).flatten()
-                    all_values.extend(v_arr)
+    # Print violation details if significant
+    if has_violation:
+        argmax_vio = int(np.argmax(vio_per_dim))
+        nq = len(q_meas)
+        dim_name = f"q[{argmax_vio}]" if argmax_vio < nq else f"v[{argmax_vio - nq}]"
+        print(
+            "EXPERIMENT - "
+            f"State bound violation: max={max_vio:.6f} at {dim_name} "
+            f"(x={x_meas[argmax_vio]:.6f}, "
+            f"lb={controller.robot.lb_x[argmax_vio]:.6f}, "
+            f"ub={controller.robot.ub_x[argmax_vio]:.6f})"
+        )
 
-                    # Check if this timestep has any violation
-                    if np.any(v_arr > violation_threshold):
-                        timesteps_with_violation += 1
+    violations["state"] = {
+        "max": max_vio,
+        "violations": 1 if has_violation else 0,
+        "max_per_dim": vio_per_dim,
+    }
 
-                    # First nx are (x - ub), last nx are (lb - x)
-                    # Take max of both for each dimension (closest to boundary)
-                    upper_values = v_arr[:nx]
-                    lower_values = v_arr[nx:]
-                    per_dim_max = np.maximum(
-                        per_dim_max, np.maximum(upper_values, lower_values)
-                    )
-
-                # Max value (closest to boundary, can be negative if satisfied)
-                max_value = np.max(all_values) if all_values else 0.0
-
-                violations["state"] = {
-                    "max": max_value,
-                    "violations": timesteps_with_violation,
-                    "max_per_dim": per_dim_max,
-                }
-        except Exception:
-            pass  # Skip if evaluation fails
-
-    # Control constraints - evaluate from u_bar if available
+    # Control constraints - evaluate from u_bar if available (still useful for MPC diagnostics)
     if (
         hasattr(controller, "controlCst")
         and hasattr(controller, "x_bar")
@@ -424,6 +403,7 @@ def update_metrics(
     desired_base_vel,
     desired_ee_vel,
     controller,
+    robot_states,
     sim_timestep,
 ):
     """Update MPSF metrics dictionary with current timestep data.
@@ -438,6 +418,7 @@ def update_metrics(
         desired_base_vel (np.ndarray or None): Desired base velocity, shape (3,).
         desired_ee_vel (np.ndarray or None): Desired EE velocity, shape (6,).
         controller: Controller instance with mask attributes and log.
+        robot_states (tuple): (q, v) tuple from robot.joint_states().
         sim_timestep (float): Simulation timestep in seconds.
     """
     # Corrections
@@ -472,8 +453,8 @@ def update_metrics(
     control_effort = np.linalg.norm(u)
     mpsf_metrics["control_efforts"].append(control_effort)
 
-    # Constraint violations
-    violations = get_constraint_violations(controller)
+    # Constraint violations (using measured states)
+    violations = get_constraint_violations(controller, robot_states)
     mpsf_metrics["constraint_violations"].append(violations)
 
 
@@ -515,20 +496,21 @@ def run_simulation(
 
     # Goal position in world frame
     base_goal = np.array([1.5, 0.4, 0])
-    ee_goal = np.array([2.5, 0.4, 0.7, -1.627, -1.567, -1.516])
+    ee_goal = np.array([2.5, 0.4, 0.7, 0, 0, 0])
 
     # Initial state
     robot_states = robot.joint_states(add_noise=False)
     states = extract_robot_states(robot, robot_states)
 
     while t <= sim.duration:
+        print(f"-------------- {t:.3f}/{sim.duration} ------------------")
         robot_states = robot.joint_states(add_noise=False)
         references = task_manager.getReferences(
             t, robot_states, controller.N + 1, controller.dt
         )
 
         desired_base_vel, desired_ee_vel = calculate_desired_velocity(
-            base_goal, ee_goal, states
+            base_goal, ee_goal, states, controller
         )
 
         # Add desired velocities for MPSF
@@ -567,13 +549,13 @@ def run_simulation(
 
         print(
             "EXPERIMENT - ",
-            f"Base Pos Error: {base_pos_err:.4f} | ",
-            f"Base Yaw Error: {base_yaw_err:.4f}",
+            f"Base Pos Error: {base_pos_err:.3f} | ",
+            f"Base Yaw Error: {base_yaw_err:.3f}",
         )
         print(
             "EXPERIMENT - ",
-            f"EE Pos Error: {ee_pos_err:.4f} | ",
-            f"EE Orientation Error: {ee_ori_err:.4f}",
+            f"EE Pos Error: {ee_pos_err:.3f} | ",
+            f"EE Orientation Error: {ee_ori_err:.3f}",
         )
 
         # Update metrics
@@ -586,6 +568,7 @@ def run_simulation(
             desired_base_vel,
             desired_ee_vel,
             controller,
+            robot_states,
             sim.timestep,
         )
         u_prev = u.copy()
@@ -595,21 +578,22 @@ def run_simulation(
     return mpsf_metrics
 
 
-def calculate_desired_velocity(base_goal, ee_goal, states):
+def calculate_desired_velocity(base_goal, ee_goal, states, controller):
     """Calculate desired base and EE velocity from goal positions and robot states.
 
     Args:
         base_goal (np.ndarray): Goal base position in world frame, shape (3,).
         ee_goal (np.ndarray): Goal EE position in world frame, shape (6,).
         states (dict): Current robot states.
+        controller (MPCBase): Controller instance with robot.ub_u and robot.lb_u attributes.
 
     Returns:
         tuple: (desired_base_vel, desired_ee_vel) where each is a (3,) or (6,) array.
     """
 
     # Gain constants
-    k_base = np.array([0.5, 0.5, 0.25])
-    k_ee = np.array([0.5, 0.5, 0.5, 0.25, 0.25, 0.25])
+    k_base = np.array([0.5, 0.5, 0.5])
+    k_ee = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
 
     # Calculate base velocity
     base_vel = base_goal - states["base"]["pose"]
@@ -624,6 +608,10 @@ def calculate_desired_velocity(base_goal, ee_goal, states):
     rotvec = Rot.from_matrix(R_error).as_rotvec()
     ee_vel[3:] = rotvec
     ee_vel = k_ee * ee_vel
+
+    # Clip velocities to constraints
+    base_vel = np.clip(base_vel, controller.robot.lb_u[:3], controller.robot.ub_u[:3])
+    ee_vel = np.clip(ee_vel, controller.robot.lb_u[3:9], controller.robot.ub_u[3:9])
 
     return base_vel, ee_vel
 

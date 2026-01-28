@@ -254,7 +254,7 @@ class WaypointPlanner(Planner):
                     self.base_reached = True
                     self.t_reached = t
                     self.py_logger.info(
-                        f"{self.name} base reached (pos_err: {pos_err:.4f}, ori_err: {yaw_err:.4f})"
+                        f"{self.name} base reached (pos_err: {pos_err:.3f}, ori_err: {yaw_err:.3f})"
                     )
                 base_finished = True
             else:
@@ -284,7 +284,7 @@ class WaypointPlanner(Planner):
                     if not self.base_reached:  # Only set time if base hasn't set it
                         self.t_reached = t
                     self.py_logger.info(
-                        f"{self.name} EE reached (pos_err: {pos_err:.4f}, ori_err: {ori_err:.4f})"
+                        f"{self.name} EE reached (pos_err: {pos_err:.3f}, ori_err: {ori_err:.3f})"
                     )
                 ee_finished = True
             else:

@@ -178,7 +178,6 @@ class MPC(MPCBase):
                 - v_bar: velocity trajectory, shape (N+1, nu)
                 - u_bar: control input trajectory, shape (N, nu)
         """
-        self.py_logger.debug(f"control time {t}")
         self.curr_control_time = t
         q, v = robot_states
         q[2:9] = wrap_pi_array(q[2:9])
@@ -518,7 +517,6 @@ class MPC(MPCBase):
         t2 = time.perf_counter()
         self.log["time_ocp_solve"] = t2 - t1
 
-        self.ocp_solver.print_statistics()
         self.log["solver_status"] = self.ocp_solver.status
         if self.ocp.solver_options.nlp_solver_type != "SQP_RTI":
             self.log["step_size"] = np.mean(self.ocp_solver.get_stats("alpha"))
