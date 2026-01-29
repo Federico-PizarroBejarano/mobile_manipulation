@@ -30,12 +30,12 @@ class MPC(MPCBase):
         # Base costs - always use SE2 (yaw tracking controlled via weights, set yaw weight to 0 to disable)
         costs.append(
             CostFunctionRegistry.create(
-                "BasePose", self.robot, cost_params.get("BasePose", {}), dimension="SE2"
+                "BasePose", self.robot, cost_params.get("BasePose", {})
             )
         )
         costs.append(
             CostFunctionRegistry.create(
-                "BaseVel", self.robot, cost_params.get("BaseVel", {}), dimension=3
+                "BaseVel", self.robot, cost_params.get("BaseVel", {})
             )
         )
 
@@ -45,8 +45,6 @@ class MPC(MPCBase):
                 "EEPose",
                 self.robot,
                 cost_params.get("EEPose", {}),
-                pose_type="SE3",
-                frame="world",
             )
         )
         costs.append(
@@ -126,22 +124,49 @@ class MPC(MPCBase):
                     "Conflict between MPC ee_mask and mpsf_ee_mask: both are True for same dimension."
                 )
 
-    def _get_config_key_for_cost_name(self, cost_name):
-        """Map cost function name to simplified config parameter key.
+        # Cache parameter structure keys (constant, no need to recompute)
+        self._p_keys = list(self.p_struct.keys())
 
-        Args:
-            cost_name (str): Cost function name (e.g., "EEPoseSE3").
+        # Pre-compute cost config mappings and dimensions
+        self._cost_config_cache = {}
+        self._cost_dim_cache = {}
+        all_tracking_costs = ["BasePose", "BaseVel", "EEPose", "EEVel"]
+        for name in all_tracking_costs:
+            cost_params = self.params["cost_params"].get(name, {})
+            self._cost_config_cache[name] = cost_params
 
-        Returns:
-            str: Simplified config key (e.g., "EEPose").
-        """
-        name_mapping = {
-            "EEPoseSE3": "EEPose",
-            "EEVel6": "EEVel",
-            "BasePoseSE2": "BasePose",
-            "BaseVel3": "BaseVel",
-        }
-        return name_mapping.get(cost_name, cost_name)
+            # Cache dimensions
+            if name == "EEPose":
+                self._cost_dim_cache[name] = 6
+            elif name == "BasePose":
+                self._cost_dim_cache[name] = 3
+            elif name == "EEVel":
+                self._cost_dim_cache[name] = 6
+            elif name == "BaseVel":
+                self._cost_dim_cache[name] = 3
+
+        # Pre-compute velocity masks (union of base_mask and mpsf_mask)
+        # Match original logic: only compute union if mpsf_mask is not None
+        if self.mpsf_base_mask is not None:
+            self._velocity_base_mask = np.maximum(self.base_mask, self.mpsf_base_mask)
+        else:
+            self._velocity_base_mask = self.base_mask.copy()
+
+        if self.mpsf_ee_mask is not None:
+            self._velocity_ee_mask = np.maximum(self.ee_mask, self.mpsf_ee_mask)
+        else:
+            self._velocity_ee_mask = self.ee_mask.copy()
+
+        # Pre-compute control effort params (constant)
+        effort_params = self.params["cost_params"]["Effort"]
+        self._control_effort_param_names = [
+            f"{param_name}_ControlEffort"
+            for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]
+        ]
+        self._control_effort_param_values = [
+            effort_params[param_name]
+            for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]
+        ]
 
     def _set_control_effort_params(self, curr_p_map):
         """Set ControlEffort cost function parameters in the parameter map.
@@ -149,9 +174,11 @@ class MPC(MPCBase):
         Args:
             curr_p_map (casadi.struct_MX): Current parameter map to update.
         """
-        effort_params = self.params["cost_params"]["Effort"]
-        for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]:
-            curr_p_map[f"{param_name}_ControlEffort"] = effort_params[param_name]
+        # Use pre-computed parameter names and values
+        for param_name, param_value in zip(
+            self._control_effort_param_names, self._control_effort_param_values
+        ):
+            curr_p_map[param_name] = param_value
 
     def control(
         self,
@@ -298,17 +325,17 @@ class MPC(MPCBase):
 
         Returns:
             Dictionary with cost function names as keys:
-                - "BasePoseSE2": list of arrays (N+1, 3)
-                - "BaseVel3": list of arrays (N+1, 3)
-                - "EEPoseSE3": list of arrays (N+1, 6)
-                - "EEVel6": list of arrays (N+1, 6)
+                - "BasePose": list of arrays (N+1, 3)
+                - "BaseVel": list of arrays (N+1, 3)
+                - "EEPose": list of arrays (N+1, 6)
+                - "EEVel": list of arrays (N+1, 6)
         """
         r_bar_map = {}
 
         # Convert base pose reference - only if provided
         if references.get("base_pose") is not None:
             base_pose = references["base_pose"]
-            r_bar_map["BasePoseSE2"] = [base_pose[i] for i in range(self.N + 1)]
+            r_bar_map["BasePose"] = [base_pose[i] for i in range(self.N + 1)]
             self.rbase_bar = (
                 base_pose.tolist() if hasattr(base_pose, "tolist") else base_pose
             )
@@ -319,13 +346,13 @@ class MPC(MPCBase):
         # Convert base velocity reference - only if provided
         if references.get("base_velocity") is not None:
             base_vel = references["base_velocity"]
-            r_bar_map["BaseVel3"] = [base_vel[i] for i in range(self.N + 1)]
+            r_bar_map["BaseVel"] = [base_vel[i] for i in range(self.N + 1)]
 
         # Convert EE pose reference - only if provided
         if references.get("ee_pose") is not None:
             ee_pose = references["ee_pose"]
             # EE reference is in world frame
-            r_bar_map["EEPoseSE3"] = [ee_pose[i] for i in range(self.N + 1)]
+            r_bar_map["EEPose"] = [ee_pose[i] for i in range(self.N + 1)]
             self.ree_bar = ee_pose.tolist() if hasattr(ee_pose, "tolist") else ee_pose
         else:
             # No EE reference: set empty list for visualization
@@ -334,7 +361,7 @@ class MPC(MPCBase):
         # Convert EE velocity reference - only if provided
         if references.get("ee_velocity") is not None:
             ee_vel = references["ee_velocity"]
-            r_bar_map["EEVel6"] = [ee_vel[i] for i in range(self.N + 1)]
+            r_bar_map["EEVel"] = [ee_vel[i] for i in range(self.N + 1)]
 
         return r_bar_map
 
@@ -396,22 +423,23 @@ class MPC(MPCBase):
             i (int): Horizon step index.
         """
         t1 = time.perf_counter()
-        p_keys = self.p_struct.keys()
 
         # List of all possible tracking cost functions (world frame only)
-        all_tracking_costs = ["BasePoseSE2", "BaseVel3", "EEPoseSE3", "EEVel6"]
+        all_tracking_costs = ["BasePose", "BaseVel", "EEPose", "EEVel"]
 
         for name in all_tracking_costs:
-            p_name_r = f"r_{name}"  # Reference parameter for the tracking cost (e.g., r_EEPoseSE3)
-            p_name_W = f"W_{name}"  # Weight matrix parameter for the tracking cost (e.g., W_EEPoseSE3)
+            p_name_r = f"r_{name}"  # Reference parameter for the tracking cost (e.g., r_EEPose)
+            p_name_W = f"W_{name}"  # Weight matrix parameter for the tracking cost (e.g., W_EEPose)
 
-            if p_name_r in p_keys:
+            if p_name_r in self._p_keys:
                 if name in r_bar_map:
                     # Reference provided: set reference and use configured weights
-                    curr_p_map[p_name_r] = r_bar_map[name][i]
-                    dim = len(r_bar_map[name][i])
-                    config_key = self._get_config_key_for_cost_name(name)
-                    cost_params = self.params["cost_params"].get(config_key, {})
+                    ref_val = r_bar_map[name][i]
+                    curr_p_map[p_name_r] = ref_val
+                    dim = len(ref_val)
+
+                    # Use cached cost params
+                    cost_params = self._cost_config_cache[name]
                     weight_key = "P" if i == self.N else "Qk"
                     weights = np.array(
                         cost_params.get(weight_key, [1.0] * dim), dtype=float
@@ -423,36 +451,30 @@ class MPC(MPCBase):
                         )
 
                     # Apply MPC masks to pose costs (zero out weights for masked dimensions)
-                    if name == "BasePoseSE2":
+                    if name == "BasePose":
                         weights = weights * self.base_mask
-                    elif name == "EEPoseSE3":
+                    elif name == "EEPose":
                         weights = weights * self.ee_mask
-                    elif name in ["BaseVel3", "EEVel6"]:
+                    elif name in ["BaseVel", "EEVel"]:
                         weight_scale = (
                             self.decay_rate**i if i <= self.objective_horizon else 0
                         )
-                        if name == "BaseVel3":
+                        if name == "BaseVel":
+                            velocity_mask = self._velocity_base_mask
                             if self.mpsf_base_mask is not None:
-                                # Union: activate if either mask is True
-                                velocity_mask = np.maximum(
-                                    self.base_mask, self.mpsf_base_mask
-                                )
-                                weights[self.mpsf_base_mask == 1] *= (
+                                # Apply MPSF weight multiplier to MPSF-masked dimensions
+                                mpsf_indices = self.mpsf_base_mask == 1
+                                weights[mpsf_indices] *= (
                                     weight_scale * self.mpsf_weight_multiplier
                                 )
-                            else:
-                                velocity_mask = self.base_mask
-                        elif name == "EEVel6":
+                        elif name == "EEVel":
+                            velocity_mask = self._velocity_ee_mask
                             if self.mpsf_ee_mask is not None:
-                                # Union: activate if either mask is True
-                                velocity_mask = np.maximum(
-                                    self.ee_mask, self.mpsf_ee_mask
-                                )
-                                weights[self.mpsf_ee_mask == 1] *= (
+                                # Apply MPSF weight multiplier to MPSF-masked dimensions
+                                mpsf_indices = self.mpsf_ee_mask == 1
+                                weights[mpsf_indices] *= (
                                     weight_scale * self.mpsf_weight_multiplier
                                 )
-                            else:
-                                velocity_mask = self.ee_mask
 
                         # Apply velocity mask to weights
                         weights = weights * velocity_mask
@@ -462,25 +484,18 @@ class MPC(MPCBase):
                     curr_p_map[p_name_W] = np.diag(weights)
                 else:
                     # No reference provided: set weights to zero (minimize control effort only)
-                    config_key = self._get_config_key_for_cost_name(name)
-                    cost_params = self.params["cost_params"].get(config_key, {})
+                    # Use cached dimension
+                    dim = self._cost_dim_cache[name]
+                    cost_params = self._cost_config_cache[name]
                     weight_key = "P" if i == self.N else "Qk"
-                    # Get dimension from default weights
+                    # Get dimension from default weights (fallback if cache fails)
                     default_weights = cost_params.get(weight_key, [1.0])
-                    if isinstance(default_weights, (list, np.ndarray)):
+                    if (
+                        isinstance(default_weights, (list, np.ndarray))
+                        and len(default_weights) > 0
+                    ):
                         dim = len(default_weights)
-                    else:
-                        # Scalar weight - determine dimension from cost function name
-                        if name == "EEPoseSE3":
-                            dim = 6
-                        elif name == "BasePoseSE2":
-                            dim = 3
-                        elif name == "EEVel6":
-                            dim = 6
-                        elif name == "BaseVel3":
-                            dim = 3
-                        else:
-                            raise ValueError(f"Unknown cost function name: {name}")
+
                     # Set zero reference and zero weights
                     curr_p_map[p_name_r] = np.zeros(dim)
                     curr_p_map[p_name_W] = np.diag(np.zeros(dim))
