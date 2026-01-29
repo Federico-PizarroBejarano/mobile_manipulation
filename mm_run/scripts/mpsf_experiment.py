@@ -503,7 +503,7 @@ def run_simulation(
     states = extract_robot_states(robot, robot_states)
 
     while t <= sim.duration:
-        print(f"-------------- {t:.3f}/{sim.duration} ------------------")
+        print(f"-------------- {t:.3f}s/{sim.duration}s ------------------")
         robot_states = robot.joint_states(add_noise=False)
         references = task_manager.getReferences(
             t, robot_states, controller.N + 1, controller.dt

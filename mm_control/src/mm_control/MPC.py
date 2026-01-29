@@ -513,11 +513,15 @@ class MPC(MPCBase):
             u_bar_initial (ndarray): Initial control trajectory guess, shape (N, nu).
         """
         t1 = time.perf_counter()
-        self.ocp_solver.solve_for_x0(xo, fail_on_nonzero_status=False)
+        # solve_for_x0 sets x0 and calls solve(), but cython wrapper may not expose .status
+        # So we manually set x0 and call solve() to get the status return value
+        self.ocp_solver.set(0, "lbx", xo)
+        self.ocp_solver.set(0, "ubx", xo)
+        status = self.ocp_solver.solve()
         t2 = time.perf_counter()
         self.log["time_ocp_solve"] = t2 - t1
 
-        self.log["solver_status"] = self.ocp_solver.status
+        self.log["solver_status"] = status
         if self.ocp.solver_options.nlp_solver_type != "SQP_RTI":
             self.log["step_size"] = np.mean(self.ocp_solver.get_stats("alpha"))
         else:
@@ -526,7 +530,7 @@ class MPC(MPCBase):
         self.log["qp_iter"] = sum(self.ocp_solver.get_stats("qp_iter"))
         self.log["cost_final"] = self.ocp_solver.get_cost()
 
-        if self.ocp_solver.status != 0:
+        if status != 0:
             x_bar = [self.ocp_solver.get(i, "x") for i in range(self.N)]
             u_bar = [self.ocp_solver.get(i, "u") for i in range(self.N)]
             x_bar.append(self.ocp_solver.get(self.N, "x"))
@@ -542,9 +546,7 @@ class MPC(MPCBase):
             }
 
             if self.params["acados"]["raise_exception_on_failure"]:
-                raise Exception(
-                    f"acados acados_ocp_solver returned status {self.ocp_solver.status}"
-                )
+                raise Exception(f"acados acados_ocp_solver returned status {status}")
         else:
             self.log["iter_snapshot"] = None
 

@@ -28,8 +28,8 @@ controller:
     static_obstacles: False
 
   collision_safety_margin:
-    self: 0.25
-    static_obstacles: 0.15
+    self: 0.10
+    static_obstacles: 0.10
 
   # Soft constraints parameters
   xu_soft:
