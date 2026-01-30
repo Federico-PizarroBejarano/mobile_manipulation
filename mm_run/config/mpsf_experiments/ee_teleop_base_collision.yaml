@@ -1,0 +1,42 @@
+# MPSF Experiment 1: EE Teleoperation with Base Collision Avoidance
+# The planner commands EE velocity along a path that would cause the base to collide
+# with obstacles. The MPSF must correct the base motion to zigzag through obstacles
+# while the EE follows the teleoperator's commands.
+
+controller:
+  base_mask: [false, false, false]
+  ee_mask: [false, false, false, false, false, false]  # Position only, no orientation
+
+  # MPSF parameters - base must avoid obstacles while EE follows teleop
+  mpsf_params:
+    objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1)
+    decay_rate: 1.0         # Decay factor per time step (0 to 1)
+    mpsf_base_mask: [false, false, false]  # MPSF controls base to avoid obstacles
+    mpsf_ee_mask: [true, true, true, false, false, false]  # EE follows planner
+    mpsf_weight_multiplier: 1.0
+    mpsf_ee_goal: [5, 0, 0.7, 0, 0, 0]  # [x, y, z, roll, pitch, yaw]
+
+  # Enable collision avoidance for base
+  self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: True
+
+  # ACADOS solver option
+  acados:
+    name: "MPSF_EE_Teleop_Base_Collision"
+
+simulation:
+  duration: 6  # Longer duration to see zigzag behavior
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"
+  - package: "mm_run"
+    path: "config/sim/simulation.yaml"
+  - package: "mm_run"
+    path: "config/mpsf_experiments/scenes/ee_teleop_obstacles_scene.yaml"
+
+logging:
+  log_dir: "mpsf_experiments/ee_teleop_base_collision"
+  log_level: 20  # INFO level

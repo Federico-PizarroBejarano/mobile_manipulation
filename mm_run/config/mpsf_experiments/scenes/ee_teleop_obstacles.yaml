@@ -1,0 +1,17 @@
+# Obstacle scene for EE Teleop Base Collision experiment
+# Obstacles placed such that base must zigzag through them while EE moves forward
+
+cylinder:
+  # Obstacle 1: Blocks direct path to EE goal
+  - name: "cylinder_1"
+    radius: 0.3
+    length: 1.0
+    xyz: [1.3, -0.4, 0.5]  # [x, y, z] in world frame - blocks direct base path
+    rpy: [0, 0, 0]
+
+  # Obstacle 2: Forces base to zigzag
+  - name: "cylinder_2"
+    radius: 0.3
+    length: 1.0
+    xyz: [3, 0.9, 0.5]  # To the left of path
+    rpy: [0, 0, 0]

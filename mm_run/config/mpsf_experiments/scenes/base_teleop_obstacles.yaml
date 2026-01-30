@@ -1,0 +1,18 @@
+# Obstacle scene for Base Teleop Arm Collision experiment
+# Obstacles placed at arm height such that arm must move out of the way
+# while base follows teleoperator commands
+
+cylinder:
+  # Obstacle 1: Blocks arm at forward position
+  - name: "cylinder_1"
+    radius: 0.25
+    length: 1.0
+    xyz: [1.5, 1, 0.6]  # [x, y, z] in world frame - at arm height, blocks forward arm
+    rpy: [0, 0, 0]
+
+  # Obstacle 2: Another obstacle to force arm retraction
+  - name: "cylinder_2"
+    radius: 0.25
+    length: 1.0
+    xyz: [2.2, 0.8, 0.6]  # To the left, at arm height
+    rpy: [0, 0, 0]

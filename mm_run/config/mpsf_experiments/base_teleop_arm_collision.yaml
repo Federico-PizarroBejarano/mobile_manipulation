@@ -1,0 +1,44 @@
+# MPSF Experiment 2: Base Teleoperation with Arm Collision Avoidance
+# The planner commands base velocity along a path, but the arm extends and would
+# collide with obstacles. The MPSF must move the arm out of the way while the
+# base follows the teleoperator's commands.
+
+controller:
+  base_mask: [false, false, false]
+  ee_mask: [false, false, false, false, false, false]
+
+  # MPSF parameters - arm must avoid obstacles while base follows teleop
+  mpsf_params:
+    objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1)
+    decay_rate: 1.0         # Decay factor per time step (0 to 1)
+    mpsf_base_mask: [true, true, true]  # Base follows planner
+    mpsf_ee_mask: [false, false, false, false, false, false]  # MPSF controls EE to avoid obstacles
+    mpsf_weight_multiplier: 1.0
+    mpsf_base_goal: [2.5, 0, 0]  # [x, y, yaw]
+
+  # Enable collision avoidance for arm
+  self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: True
+
+  # ACADOS solver option
+  acados:
+    name: "MPSF_Base_Teleop_Arm_Collision"
+
+simulation:
+  duration: 5  # Longer duration to see arm avoidance behavior
+  robot:
+    home: [0, 0, 0, 0.99pi, -0.7854,  1.5708, -0.7854,  1.5708, 1.3100] # default
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"
+  - package: "mm_run"
+    path: "config/sim/simulation.yaml"
+  - package: "mm_run"
+    path: "config/mpsf_experiments/scenes/base_teleop_obstacles_scene.yaml"
+
+logging:
+  log_dir: "mpsf_experiments/base_teleop_arm_collision"
+  log_level: 20  # INFO level

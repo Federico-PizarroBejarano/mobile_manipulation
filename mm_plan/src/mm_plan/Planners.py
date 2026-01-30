@@ -12,6 +12,7 @@ from mm_utils.math import (
     compute_ee_pose_errors,
     interpolate,
     normalize_mask,
+    wrap_pi_array,
 )
 
 
@@ -364,6 +365,22 @@ class PathPlanner(Planner):
                 "PathPlanner must specify at least one of 'base_path' or 'ee_path'"
             )
 
+        # Validate that if both paths are provided, they have the same length
+        if self.has_base_ref and self.has_ee_ref:
+            base_len = len(self.base_plan["p"])
+            ee_len = len(self.ee_plan["p"])
+            if base_len != ee_len:
+                raise ValueError(
+                    f"base_path and ee_path must have the same number of waypoints. "
+                    f"Got base_path: {base_len} waypoints, ee_path: {ee_len} waypoints"
+                )
+
+        # Calculate path duration once during initialization
+        if self.has_base_ref:
+            self.path_duration = self.base_plan["t"][-1]
+        else:
+            self.path_duration = self.ee_plan["t"][-1]
+
         # Common parameters
         self.tracking_pos_err_tol = config.get("tracking_pos_err_tol", 0.02)
         self.tracking_ori_err_tol = config.get("tracking_ori_err_tol", 0.1)
@@ -375,11 +392,27 @@ class PathPlanner(Planner):
         self.start_time = 0
 
     def _create_plan(self, path, dt):
-        """Create plan dictionary with times, positions, and velocities."""
+        """Create plan dictionary with times, positions, and velocities.
+
+        Properly handles angle wrapping for angular dimensions:
+        - Base path (3D): yaw angle at index 2
+        - EE path (6D): roll, pitch, yaw angles at indices 3, 4, 5
+        """
         velocities = np.zeros_like(path)
-        if len(path) > 1:
-            velocities[:-1] = np.diff(path, axis=0) / dt
-            velocities[-1] = velocities[-2]  # Extend last velocity
+        # Compute differences
+        diffs = np.diff(path, axis=0)
+
+        # Wrap angular differences to handle pi to -pi transitions
+        if path.shape[1] == 3:
+            # Base path: yaw angle is at index 2
+            diffs[:, 2] = wrap_pi_array(diffs[:, 2])
+        elif path.shape[1] == 6:
+            # EE path: roll, pitch, yaw angles are at indices 3, 4, 5
+            for i in [3, 4, 5]:
+                diffs[:, i] = wrap_pi_array(diffs[:, i])
+
+        velocities[:-1] = diffs / dt
+        velocities[-1] = velocities[-2]  # Extend last velocity
 
         times = np.arange(len(path)) * dt
 
@@ -474,6 +507,8 @@ class PathPlanner(Planner):
     def checkFinished(self, t, states, base_mask=None, ee_mask=None):
         """Check if path has been completed.
 
+        Path is considered finished when the elapsed time exceeds the path duration.
+
         Args:
             t (float): Current time.
             states (dict): Dictionary with "base" and "EE" keys containing pose information.
@@ -485,61 +520,71 @@ class PathPlanner(Planner):
         """
         base_mask = normalize_mask(base_mask, dim=3)
         ee_mask = normalize_mask(ee_mask, dim=6)
-        base_finished = True
-        ee_finished = True
+
+        # Calculate elapsed time since path started
+        if self.started:
+            elapsed_time = t - self.start_time
+        else:
+            elapsed_time = 0.0
+
+        # Time-based completion: check if path duration has elapsed
+        self.finished = elapsed_time >= self.path_duration
 
         # Check base if applicable
         if self.has_base_ref:
-            base_pose = states["base"]["pose"]
-            base_vel = states["base"].get("velocity")
-            end_pose = self.base_plan["p"][-1]
+            # Find current waypoint index based on elapsed time
+            waypoint_idx = (
+                np.searchsorted(self.base_plan["t"], elapsed_time, side="right") - 1
+            )
+            waypoint_idx = max(0, min(waypoint_idx, len(self.base_plan["p"]) - 1))
+            current_waypoint = self.base_plan["p"][waypoint_idx]
 
-            _, _, pos_cond, ori_cond = compute_base_pose_errors(
+            # Compute error to current waypoint for logging
+            base_pose = states["base"]["pose"]
+            pos_err_curr, yaw_err_curr, _, _ = compute_base_pose_errors(
                 base_pose,
-                end_pose,
+                current_waypoint,
                 base_mask,
                 self.tracking_pos_err_tol,
                 self.tracking_ori_err_tol,
             )
 
-            pos_ori_cond = pos_cond and ori_cond
-            vel_cond = base_vel is not None and np.linalg.norm(base_vel) < 1e-2
-
-            if (not self.end_stop and pos_ori_cond) or (
-                self.end_stop and pos_ori_cond and vel_cond
-            ):
-                base_finished = True
-            else:
-                base_finished = False
+            # Log current waypoint and error
+            self.py_logger.debug(
+                f"{self.name} base: waypoint {waypoint_idx}/{len(self.base_plan['p'])-1}, "
+                f"pos_err: {pos_err_curr:.4f}m, yaw_err: {yaw_err_curr:.4f}rad"
+            )
 
         # Check EE if applicable
         if self.has_ee_ref:
-            ee_pose = states["EE"]["pose"]
-            ee_vel = states["EE"].get("velocity")
-            end_pose = self.ee_plan["p"][-1]
+            # Find current waypoint index based on elapsed time
+            waypoint_idx = (
+                np.searchsorted(self.ee_plan["t"], elapsed_time, side="right") - 1
+            )
+            waypoint_idx = max(0, min(waypoint_idx, len(self.ee_plan["p"]) - 1))
+            current_waypoint = self.ee_plan["p"][waypoint_idx]
 
-            _, _, pos_cond, ori_cond = compute_ee_pose_errors(
+            # Compute error to current waypoint for logging
+            ee_pose = states["EE"]["pose"]
+            pos_err_curr, ori_err_curr, _, _ = compute_ee_pose_errors(
                 ee_pose,
-                end_pose,
+                current_waypoint,
                 ee_mask,
                 self.tracking_pos_err_tol,
                 self.tracking_ori_err_tol,
             )
 
-            pos_ori_cond = pos_cond and ori_cond
-            vel_cond = ee_vel is not None and np.linalg.norm(ee_vel) < 1e-2
-
-            if (not self.end_stop and pos_ori_cond) or (
-                self.end_stop and pos_ori_cond and vel_cond
-            ):
-                ee_finished = True
-            else:
-                ee_finished = False
+            # Log current waypoint and error
+            self.py_logger.debug(
+                f"{self.name} EE: waypoint {waypoint_idx}/{len(self.ee_plan['p'])-1}, "
+                f"pos_err: {pos_err_curr:.4f}m, ori_err: {ori_err_curr:.4f}rad"
+            )
 
         # Finished if all specified paths are completed
-        self.finished = base_finished and ee_finished
         if self.finished:
-            self.py_logger.info(f"{self.name} finished")
+            self.py_logger.info(
+                f"{self.name} finished (time elapsed: {elapsed_time:.3f}s)"
+            )
 
         return self.finished
 

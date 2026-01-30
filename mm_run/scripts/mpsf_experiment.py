@@ -464,6 +464,8 @@ def run_simulation(
     task_manager,
     ctrl_config,
     sim_config,
+    base_goal=None,
+    ee_goal=None,
 ):
     """Run the main simulation loop and collect MPSF metrics.
 
@@ -473,6 +475,8 @@ def run_simulation(
         task_manager (TaskManager): Task manager with getReferences() and update().
         ctrl_config (dict): Controller configuration with "cmd_vel_type" key.
         sim_config (dict): Simulation configuration with "robot" -> "dims" -> "v".
+        base_goal (np.ndarray, optional): Base goal pose [x, y, yaw]. Defaults to None.
+        ee_goal (np.ndarray, optional): EE goal pose [x, y, z, roll, pitch, yaw]. Defaults to None.
 
     Returns:
         dict: Dictionary with keys "base_corrections", "ee_corrections",
@@ -494,10 +498,6 @@ def run_simulation(
         "constraint_violations": [],
     }
 
-    # Goal position in world frame
-    base_goal = np.array([1.5, 0.4, 0])
-    ee_goal = np.array([2.5, 0.4, 0.7, 0, 0, 0])
-
     # Initial state
     robot_states = robot.joint_states(add_noise=False)
     states = extract_robot_states(robot, robot_states)
@@ -513,12 +513,14 @@ def run_simulation(
             base_goal, ee_goal, states, controller
         )
 
-        # Add desired velocities for MPSF
+        # Add desired velocities for MPSF (only add if not None)
         if desired_base_vel is not None or desired_ee_vel is not None:
-            references["desired_velocity"] = {
-                "base_velocity": desired_base_vel,
-                "ee_velocity": desired_ee_vel,
-            }
+            desired_velocity = {}
+            if desired_base_vel is not None:
+                desired_velocity["base_velocity"] = desired_base_vel
+            if desired_ee_vel is not None:
+                desired_velocity["ee_velocity"] = desired_ee_vel
+            references["desired_velocity"] = desired_velocity
 
         # Control
         v_bar, u_bar = controller.control(t, robot_states, references)
@@ -538,25 +540,27 @@ def run_simulation(
         )
 
         # Normalize masks and compute errors using utility functions
-        mpsf_base_mask = normalize_mask(controller.mpsf_base_mask, dim=3)
-        mpsf_ee_mask = normalize_mask(controller.mpsf_ee_mask, dim=6)
-        base_pos_err, base_yaw_err, _, _ = compute_base_pose_errors(
-            states["base"]["pose"], base_goal, mpsf_base_mask, 0, 0
-        )
-        ee_pos_err, ee_ori_err, _, _ = compute_ee_pose_errors(
-            states["EE"]["pose"], ee_goal, mpsf_ee_mask, 0, 0
-        )
+        if base_goal is not None:
+            mpsf_base_mask = normalize_mask(controller.mpsf_base_mask, dim=3)
+            base_pos_err, base_yaw_err, _, _ = compute_base_pose_errors(
+                states["base"]["pose"], base_goal, mpsf_base_mask, 0, 0
+            )
+            print(
+                "EXPERIMENT - ",
+                f"Base Pos Error: {base_pos_err:.3f} | ",
+                f"Base Yaw Error: {base_yaw_err:.3f}",
+            )
 
-        print(
-            "EXPERIMENT - ",
-            f"Base Pos Error: {base_pos_err:.3f} | ",
-            f"Base Yaw Error: {base_yaw_err:.3f}",
-        )
-        print(
-            "EXPERIMENT - ",
-            f"EE Pos Error: {ee_pos_err:.3f} | ",
-            f"EE Orientation Error: {ee_ori_err:.3f}",
-        )
+        if ee_goal is not None:
+            mpsf_ee_mask = normalize_mask(controller.mpsf_ee_mask, dim=6)
+            ee_pos_err, ee_ori_err, _, _ = compute_ee_pose_errors(
+                states["EE"]["pose"], ee_goal, mpsf_ee_mask, 0, 0
+            )
+            print(
+                "EXPERIMENT - ",
+                f"EE Pos Error: {ee_pos_err:.3f} | ",
+                f"EE Orientation Error: {ee_ori_err:.3f}",
+            )
 
         # Update metrics
         update_metrics(
@@ -581,37 +585,61 @@ def run_simulation(
 def calculate_desired_velocity(base_goal, ee_goal, states, controller):
     """Calculate desired base and EE velocity from goal positions and robot states.
 
+    Uses a deadband approach: maintains constant velocity when far from goal,
+    switches to proportional control when close to goal.
+
     Args:
-        base_goal (np.ndarray): Goal base position in world frame, shape (3,).
-        ee_goal (np.ndarray): Goal EE position in world frame, shape (6,).
+        base_goal (np.ndarray or None): Goal base position in world frame, shape (3,).
+        ee_goal (np.ndarray or None): Goal EE position in world frame, shape (6,).
         states (dict): Current robot states.
         controller (MPCBase): Controller instance with robot.ub_u and robot.lb_u attributes.
 
     Returns:
-        tuple: (desired_base_vel, desired_ee_vel) where each is a (3,) or (6,) array.
+        tuple: (desired_base_vel, desired_ee_vel) where each is a (3,) or (6,) array, or None.
     """
+    # Velocity thresholds: maintain constant velocity if error > threshold
+    base_threshold = [0.3, 0.3, 0.3]  # meters
+    ee_threshold = [0.2, 0.2, 0.2, 0.3, 0.3, 0.3]  # meters, radians
 
-    # Gain constants
-    k_base = np.array([0.5, 0.5, 0.5])
-    k_ee = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
+    # Maximum velocities (used when far from goal)
+    max_base_vel = np.array([1, 1, 1])
+    max_ee_vel = np.array([0.8, 0.8, 0.8, 0.5, 0.5, 0.5])
 
     # Calculate base velocity
-    base_vel = base_goal - states["base"]["pose"]
-    base_vel[-1] = wrap_pi_scalar(base_vel[-1])
-    base_vel = k_base * base_vel
+    if base_goal is not None:
+        base_vel = base_goal - states["base"]["pose"]
+        base_vel[-1] = wrap_pi_scalar(base_vel[-1])
+
+        for i in range(3):
+            if abs(base_vel[i]) > base_threshold[i]:
+                base_vel[i] = np.sign(base_vel[i]) * max_base_vel[i]
+
+        # Clip velocities to constraints
+        base_vel = np.clip(
+            base_vel, controller.robot.lb_u[:3], controller.robot.ub_u[:3]
+        )
+    else:
+        base_vel = None
 
     # Calculate EE velocity
-    ee_vel = ee_goal - states["EE"]["pose"]
-    R_goal = Rot.from_euler("xyz", ee_goal[3:]).as_matrix()
-    R_curr = Rot.from_euler("xyz", states["EE"]["pose"][3:]).as_matrix()
-    R_error = R_goal @ R_curr.T
-    rotvec = Rot.from_matrix(R_error).as_rotvec()
-    ee_vel[3:] = rotvec
-    ee_vel = k_ee * ee_vel
+    if ee_goal is not None:
+        ee_vel = ee_goal - states["EE"]["pose"]
 
-    # Clip velocities to constraints
-    base_vel = np.clip(base_vel, controller.robot.lb_u[:3], controller.robot.ub_u[:3])
-    ee_vel = np.clip(ee_vel, controller.robot.lb_u[3:9], controller.robot.ub_u[3:9])
+        # Orientation error
+        R_goal = Rot.from_euler("xyz", ee_goal[3:]).as_matrix()
+        R_curr = Rot.from_euler("xyz", states["EE"]["pose"][3:]).as_matrix()
+        R_error = R_goal @ R_curr.T
+        rotvec = Rot.from_matrix(R_error).as_rotvec()
+        ee_vel[3:] = rotvec
+
+        for i in range(6):
+            if abs(ee_vel[i]) > ee_threshold[i]:
+                ee_vel[i] = np.sign(ee_vel[i]) * max_ee_vel[i]
+
+        # Clip velocities to constraints
+        ee_vel = np.clip(ee_vel, controller.robot.lb_u[3:9], controller.robot.ub_u[3:9])
+    else:
+        ee_vel = None
 
     return base_vel, ee_vel
 
@@ -720,12 +748,21 @@ def main():
     config = load_config(args)
     sim, controller, task_manager, ctrl_config, sim_config = setup_experiment(config)
 
+    # Extract MPSF goals from config if available
+    mpsf_goals = ctrl_config.get("mpsf_params", {})
+    base_goal = mpsf_goals.get("mpsf_base_goal")
+    base_goal = np.array(base_goal) if base_goal is not None else None
+    ee_goal = mpsf_goals.get("mpsf_ee_goal")
+    ee_goal = np.array(ee_goal) if ee_goal is not None else None
+
     mpsf_metrics = run_simulation(
         sim,
         controller,
         task_manager,
         ctrl_config,
         sim_config,
+        base_goal=base_goal,
+        ee_goal=ee_goal,
     )
     print_metrics(mpsf_metrics)
 
