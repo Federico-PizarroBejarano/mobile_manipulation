@@ -16,6 +16,7 @@ catkin_install_python(PROGRAMS
    nodes/sim_ros.py
    nodes/isaac_sim_ros.py
    nodes/mpc_ros.py
+   nodes/mpsf_ros.py
    nodes/planner_test_ros.py
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )

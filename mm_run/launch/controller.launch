@@ -6,8 +6,10 @@
   <arg name="ctrl_config" default="default" doc="alternative controller config overwriting the one in config"/>
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
+  <arg name="mpsf" default="false" doc="use MPSF controller node instead of standard MPC controller"/>
 
   <!-- Controller -->
-  <node pkg="mm_run" type="mpc_ros.py" name="controller_mpc" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)"/>
+  <node if="$(arg mpsf)" pkg="mm_run" type="mpsf_ros.py" name="controller_mpsf" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)"/>
+  <node unless="$(arg mpsf)" pkg="mm_run" type="mpc_ros.py" name="controller_mpc" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)"/>
 
 </launch>

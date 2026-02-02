@@ -35,6 +35,11 @@ from mm_utils.math import wrap_pi_scalar
 class ControllerROSNode:
     def __init__(self):
         np.set_printoptions(precision=3, suppress=True)
+        # Initialize controller state parameters early to prevent simulation from exiting
+        # This must be done before any operations that might take time
+        rospy.set_param("/controller_finished", False)
+        rospy.set_param("/controller_started", False)
+
         argv = rospy.myargv(argv=sys.argv)
         parser = argparse.ArgumentParser()
         parser.add_argument(
@@ -480,9 +485,9 @@ class ControllerROSNode:
             print(f"planner {planner.name} targets: {', '.join(targets)}")
 
         print("-----Checking Vicon Tool messages----- ")
-        use_vicon_tool_data = True
+        self.use_vicon_tool_data = True
         if not self.vicon_tool_interface.ready():
-            use_vicon_tool_data = False
+            self.use_vicon_tool_data = False
             print(
                 "Controller did not receive vicon tool "
                 + self.ctrl_config["robot"]["tool_vicon_name"]
@@ -548,6 +553,8 @@ class ControllerROSNode:
             )
             self.sot_lock.release()
 
+            self.update_references(references, robot_states)
+
             tc1 = time.perf_counter()
             v_bar, u_bar = self.controller.control(t - t0, robot_states, references)
             tc2 = time.perf_counter()
@@ -601,7 +608,7 @@ class ControllerROSNode:
 
             # Update Task Manager
             # Convert to pose arrays in world frame
-            if use_vicon_tool_data:
+            if self.use_vicon_tool_data:
                 ee_pos = self.vicon_tool_interface.position
                 ee_quat = self.vicon_tool_interface.orientation
                 # For Vicon data, velocity is not directly available, set to zeros
@@ -754,6 +761,15 @@ class ControllerROSNode:
     def log_mpc_info(self, logger, controller):
         for key, val in controller.log.items():
             logger.append("_".join(["mpc", key]) + "s", val)
+
+    def update_references(self, references, robot_states):
+        """Update the references for the controller.
+
+        Args:
+            references (dict): The references to update.
+            robot_states (tuple): The robot states.
+        """
+        pass
 
 
 if __name__ == "__main__":

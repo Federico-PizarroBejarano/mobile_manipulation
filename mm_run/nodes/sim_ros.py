@@ -90,7 +90,11 @@ def main():
     vicon_tool_interface = SimulatedViconObjectInterface(
         sim_config["robot"]["tool_vicon_name"]
     )
-    while not ros_interface.ready() or not rospy.has_param("/controller_started"):
+    while (
+        not ros_interface.ready()
+        or not rospy.has_param("/controller_started")
+        or not rospy.get_param("/controller_started")
+    ):
         q, v = robot.joint_states()
         ros_interface.publish_feedback(t, q, v)
         ros_interface.publish_time(t)
