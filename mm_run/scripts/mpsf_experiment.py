@@ -1,10 +1,8 @@
 import argparse
 import datetime
 import logging
-import time
 
 import numpy as np
-from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as Rot
 
 import mm_control.MPC as MPC
@@ -14,6 +12,7 @@ from mm_utils import parsing
 from mm_utils.math import (
     compute_base_pose_errors,
     compute_ee_pose_errors,
+    compute_velocity_command,
     normalize_mask,
     wrap_pi_scalar,
 )
@@ -197,35 +196,6 @@ def setup_experiment(config):
     print(f"Starting simulation: duration={sim.duration}s, timestep={sim.timestep}s")
 
     return sim, controller, task_manager, ctrl_config, sim_config
-
-
-def compute_velocity_command(
-    u, u_bar, v_bar, cmd_vel_type, sim_timestep, controller_dt
-):
-    """Compute velocity command from controller output.
-
-    Args:
-        u (np.ndarray): Current velocity command, shape (nu,).
-        u_bar (np.ndarray): Control input, shape (N+1, nu) or (nu,).
-        v_bar (np.ndarray): Velocity trajectory, shape (N+1, nu).
-        cmd_vel_type (str): "integration" or "interpolation".
-        sim_timestep (float): Simulation timestep in seconds.
-        controller_dt (float): Controller timestep in seconds.
-
-    Returns:
-        np.ndarray: Computed velocity command, shape (nu,).
-    """
-    if cmd_vel_type == "integration":
-        return u + u_bar[0] * sim_timestep
-    elif cmd_vel_type == "interpolation":
-        N = v_bar.shape[0]
-        t_v_bar = np.arange(N) * controller_dt
-        v_interp = interp1d(
-            t_v_bar, v_bar, axis=0, bounds_error=False, fill_value="extrapolate"
-        )
-        return v_interp(sim_timestep)
-    else:
-        raise ValueError(f"Unknown cmd_vel_type: {cmd_vel_type}")
 
 
 def extract_robot_states(robot, robot_states):
@@ -484,9 +454,12 @@ def run_simulation(
             "constraint_violations".
     """
     robot = sim.robot
-    t = 0.0
     u = np.zeros(sim_config["robot"]["dims"]["v"])
     u_prev = u.copy()
+
+    # Controller frequency management
+    ctrl_period = 1.0 / ctrl_config.get("ctrl_rate")
+    last_controller_time = -ctrl_period  # Initialize to allow first call
 
     mpsf_metrics = {
         "base_corrections": [],
@@ -502,32 +475,44 @@ def run_simulation(
     robot_states = robot.joint_states(add_noise=False)
     states = extract_robot_states(robot, robot_states)
 
+    t = 0.0
     while t <= sim.duration:
         print(f"-------------- {t:.3f}s/{sim.duration}s ------------------")
         robot_states = robot.joint_states(add_noise=False)
-        references = task_manager.getReferences(
-            t, robot_states, controller.N + 1, controller.dt
-        )
 
-        desired_base_vel, desired_ee_vel = calculate_desired_velocity(
-            base_goal, ee_goal, states, controller
-        )
+        # Only call controller if enough time has passed
+        if t - last_controller_time >= ctrl_period:
+            # Get references from TaskManager (only when controller is called)
+            references = task_manager.getReferences(
+                t, robot_states, controller.N + 1, controller.dt
+            )
 
-        # Add desired velocities for MPSF (only add if not None)
-        if desired_base_vel is not None or desired_ee_vel is not None:
-            desired_velocity = {}
-            if desired_base_vel is not None:
-                desired_velocity["base_velocity"] = desired_base_vel
-            if desired_ee_vel is not None:
-                desired_velocity["ee_velocity"] = desired_ee_vel
-            references["desired_velocity"] = desired_velocity
+            desired_base_vel, desired_ee_vel = calculate_desired_velocity(
+                base_goal, ee_goal, states, controller
+            )
 
-        # Control
-        v_bar, u_bar = controller.control(t, robot_states, references)
+            # Add desired velocities for MPSF (only add if not None)
+            if desired_base_vel is not None or desired_ee_vel is not None:
+                desired_velocity = {}
+                if desired_base_vel is not None:
+                    desired_velocity["base_velocity"] = desired_base_vel
+                if desired_ee_vel is not None:
+                    desired_velocity["ee_velocity"] = desired_ee_vel
+                references["desired_velocity"] = desired_velocity
 
-        # Compute velocity command
+            # Control
+            v_bar, u_bar = controller.control(t, robot_states, references)
+            last_controller_time = t
+
+        # Compute velocity command using the latest controller output
         u = compute_velocity_command(
-            u, u_bar, v_bar, ctrl_config["cmd_vel_type"], sim.timestep, controller.dt
+            u,
+            u_bar,
+            v_bar,
+            ctrl_config["cmd_vel_type"],
+            t - last_controller_time,
+            controller.dt,
+            simulation_dt=sim.timestep,
         )
 
         robot.command_velocity(u)
@@ -576,8 +561,6 @@ def run_simulation(
             sim.timestep,
         )
         u_prev = u.copy()
-
-        time.sleep(sim.timestep)
 
     return mpsf_metrics
 

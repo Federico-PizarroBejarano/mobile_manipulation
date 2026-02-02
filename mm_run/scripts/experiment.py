@@ -5,7 +5,6 @@ import os
 import time
 
 import numpy as np
-from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as Rot
 
 import mm_control.MPC as MPC
@@ -13,6 +12,7 @@ from mm_plan.TaskManager import TaskManager
 from mm_simulator import simulation
 from mm_utils import parsing
 from mm_utils.logging import DataLogger
+from mm_utils.math import compute_velocity_command
 
 
 def main():
@@ -108,9 +108,6 @@ def main():
     sim_log.setLevel(config["logging"]["log_level"])
     sim_log.addHandler(ch)
 
-    # initial time, state, input
-    t = 0.0
-
     # init logger (combined sim+control in one process)
     logger = DataLogger(config, name="combined")
 
@@ -125,35 +122,38 @@ def main():
     sot.activatePlanners()
     u = np.zeros(sim_config["robot"]["dims"]["v"])
 
+    # Controller frequency management
+    ctrl_period = 1.0 / ctrl_config.get("ctrl_rate")
+    last_controller_time = -ctrl_period  # Initialize to allow first call
+
+    t = 0.0
     while t <= sim.duration:
+        print(f"-------------- {t:.3f}s/{sim.duration}s ------------------")
         # open-loop command
         robot_states = robot.joint_states(add_noise=False)
 
-        # Get references from TaskManager
-        references = sot.getReferences(t, robot_states, controller.N + 1, controller.dt)
-
-        t0 = time.perf_counter()
-        v_bar, u_bar = controller.control(t, robot_states, references)
-        t1 = time.perf_counter()
-        controller_log.log(20, f"Controller Run Time: {t1 - t0}")
-
-        if ctrl_config["cmd_vel_type"] == "integration":
-            u += u_bar[0] * sim.timestep
-        elif ctrl_config["cmd_vel_type"] == "interpolation":
-            # Interpolate velocity trajectory at sim.timestep
-            # v_bar has shape (N+1, nu), times are at 0, dt, 2*dt, ..., N*dt
-            N = v_bar.shape[0]
-            t_v_bar = np.arange(N) * controller.dt
-            v_interp = interp1d(
-                t_v_bar,
-                v_bar,
-                axis=0,
-                bounds_error=False,
-                fill_value="extrapolate",
+        # Only call controller if enough time has passed
+        if t - last_controller_time >= ctrl_period:
+            # Get references from TaskManager
+            references = sot.getReferences(
+                t, robot_states, controller.N + 1, controller.dt
             )
-            u = v_interp(sim.timestep)
-        else:
-            raise ValueError(f"Unknown cmd_vel_type: {ctrl_config['cmd_vel_type']}")
+
+            t0 = time.perf_counter()
+            v_bar, u_bar = controller.control(t, robot_states, references)
+            t1 = time.perf_counter()
+            controller_log.log(20, f"Controller Run Time: {t1 - t0}")
+            last_controller_time = t
+
+        u = compute_velocity_command(
+            u,
+            u_bar,
+            v_bar,
+            ctrl_config["cmd_vel_type"],
+            t - last_controller_time,
+            controller.dt,
+            simulation_dt=sim.timestep,
+        )
 
         robot.command_velocity(u)
         t, _ = sim.step(t)
@@ -230,8 +230,6 @@ def main():
         if "MPC" in ctrl_config["type"]:
             for key, val in controller.log.items():
                 logger.append("_".join(["mpc", key]) + "s", val)
-
-        time.sleep(sim.timestep)
 
     session_timestamp = timestamp.strftime("%Y-%m-%d_%H-%M-%S")
     logger.save(session_timestamp=session_timestamp)

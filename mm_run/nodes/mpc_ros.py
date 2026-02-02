@@ -171,11 +171,13 @@ class ControllerROSNode:
         dt_pub_nsec = int((dt_pub - dt_pub_sec) * 1e9)
         if self.ctrl_config["cmd_vel_type"] == "integration":
             self.cmd_vel_timer = rospy.Timer(
-                rospy.Duration(dt_pub_sec, dt_pub_nsec), self._publish_cmd_vel
+                rospy.Duration(dt_pub_sec, dt_pub_nsec),
+                self._publish_cmd_vel_integration,
             )
         elif self.ctrl_config["cmd_vel_type"] == "interpolation":
             self.cmd_vel_timer = rospy.Timer(
-                rospy.Duration(dt_pub_sec, dt_pub_nsec), self._publish_cmd_vel_new
+                rospy.Duration(dt_pub_sec, dt_pub_nsec),
+                self._publish_cmd_vel_interpolation,
             )
 
         self.lock = threading.Lock()
@@ -190,14 +192,14 @@ class ControllerROSNode:
         self.robot_interface.brake()
         self.logger.save(session_timestamp=self.session_timestamp)
 
-    def _publish_cmd_vel(self, event):
+    def _publish_cmd_vel_integration(self, event):
         if self.mpc_plan is not None:
             t = rospy.Time.now().to_sec()
 
             self.lock.acquire()
-            t_elasped = t - self.mpc_plan_time_stamp
+            t_elapsed = t - self.mpc_plan_time_stamp
             self.cmd_vel += (
-                self.mpc_plan_interp(t_elasped)
+                self.mpc_plan_interp(t_elapsed)
                 * (event.current_real - event.last_real).to_sec()
             )
 
@@ -205,12 +207,12 @@ class ControllerROSNode:
 
         self.robot_interface.publish_cmd_vel(self.cmd_vel)
 
-    def _publish_cmd_vel_new(self, event):
+    def _publish_cmd_vel_interpolation(self, event):
         if self.mpc_plan is not None:
             t = rospy.Time.now().to_sec()
             self.lock.acquire()
-            t_elasped = t - self.mpc_plan_time_stamp
-            self.cmd_vel = self.mpc_plan_interp(t_elasped)
+            t_elapsed = t - self.mpc_plan_time_stamp
+            self.cmd_vel = self.mpc_plan_interp(t_elapsed)
             self.lock.release()
 
         self.robot_interface.publish_cmd_vel(self.cmd_vel)
@@ -422,7 +424,7 @@ class ControllerROSNode:
         self.controller_visualization_pub.publish(marker_base)
 
         # ee tracking points
-        if len(controller.ree_bar) > 0 and controller.ree_bar[0].shape[0] == 3:
+        if len(controller.ree_bar) > 0 and len(controller.ree_bar[0]) == 3:
             marker_ree = self._make_marker(
                 Marker.POINTS, 2, rgba=[0.0, 1.0, 1.0, 1], scale=[0.1, 0.1, 0.1]
             )
@@ -516,6 +518,10 @@ class ControllerROSNode:
         t = rospy.Time.now().to_sec()
         t0 = t
         self.sot.started = True
+
+        # Signal that controller has started (for simulation timing)
+        rospy.set_param("/controller_started", True)
+        rospy.set_param("/controller_finished", False)
 
         while not self.ctrl_c:
             t = rospy.Time.now().to_sec()
@@ -632,7 +638,17 @@ class ControllerROSNode:
 
             self.sot_lock.acquire()
             updated, _ = self.sot.update(t - t0, states)
+            # Check if all tasks are finished
+            all_finished = (
+                self.sot.planner_num > 0
+                and self.sot.curr_task_id >= self.sot.planner_num - 1
+                and self.sot.planners[self.sot.curr_task_id].finished
+            )
             self.sot_lock.release()
+
+            # Signal that controller has finished all tasks
+            if all_finished:
+                rospy.set_param("/controller_finished", True)
 
             if self.use_joy and updated:
                 self.joystick_interface.reset_button()

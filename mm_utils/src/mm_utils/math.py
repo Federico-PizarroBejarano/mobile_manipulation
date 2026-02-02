@@ -1,5 +1,6 @@
 import casadi as cs
 import numpy as np
+from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as Rot
 from spatialmath.base import q2r, qunit, r2q
 
@@ -403,3 +404,73 @@ def compute_ee_pose_errors(ee_pose, ee_target, ee_mask, pos_tol, ori_tol):
         ori_within_tol = ori_err < ori_tol
 
     return pos_err, ori_err, pos_within_tol, ori_within_tol
+
+
+def compute_velocity_command_integration(u, u_bar, t, controller_dt, simulation_dt):
+    """Compute velocity command using integration method.
+
+    Args:
+        u (np.ndarray): Current velocity command, shape (nu,).
+        u_bar (np.ndarray): Control input, shape (N+1, nu) or (nu,). Uses first element.
+        t (float): Time to interpolate at (relative to controller plan start).
+        controller_dt (float): Controller timestep in seconds.
+        simulation_dt (float): Simulation timestep in seconds (for integration).
+
+    Returns:
+        np.ndarray: New velocity command, shape (nu,).
+    """
+    N = u_bar.shape[0]
+    t_u_bar = np.arange(N) * controller_dt
+    u_interp = interp1d(
+        t_u_bar, u_bar, axis=0, bounds_error=False, fill_value="extrapolate"
+    )
+
+    return u + u_interp(t) * simulation_dt
+
+
+def compute_velocity_command_interpolation(v_bar, t, controller_dt):
+    """Compute velocity command using interpolation method.
+
+    Args:
+        v_bar (np.ndarray): Velocity trajectory, shape (N+1, nu).
+        t (float): Time to interpolate at (relative to controller plan start).
+        controller_dt (float): Controller timestep in seconds.
+
+    Returns:
+        np.ndarray: Interpolated velocity command, shape (nu,).
+    """
+    N = v_bar.shape[0]
+    t_v_bar = np.arange(N) * controller_dt
+    v_interp = interp1d(
+        t_v_bar, v_bar, axis=0, bounds_error=False, fill_value="extrapolate"
+    )
+    return v_interp(t + controller_dt)
+
+
+def compute_velocity_command(
+    u, u_bar, v_bar, cmd_vel_type, t, controller_dt, simulation_dt=None
+):
+    """Compute velocity command from controller output.
+
+    This is a convenience function that handles both integration and interpolation methods.
+
+    Args:
+        u (np.ndarray): Current velocity command, shape (nu,).
+        u_bar (np.ndarray): Control input, shape (N+1, nu) or (nu,).
+        v_bar (np.ndarray): Velocity trajectory, shape (N+1, nu).
+        cmd_vel_type (str): "integration" or "interpolation".
+        t (float): Time to interpolate at (relative to controller plan start).
+        controller_dt (float): Controller timestep in seconds.
+        simulation_dt (float, optional): Simulation timestep in seconds. Required for integration method.
+
+    Returns:
+        np.ndarray: Computed velocity command, shape (nu,).
+    """
+    if cmd_vel_type == "integration":
+        return compute_velocity_command_integration(
+            u, u_bar, t, controller_dt, simulation_dt
+        )
+    elif cmd_vel_type == "interpolation":
+        return compute_velocity_command_interpolation(v_bar, t, controller_dt)
+    else:
+        raise ValueError(f"Unknown cmd_vel_type: {cmd_vel_type}")
