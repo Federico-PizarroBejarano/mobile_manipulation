@@ -13,6 +13,7 @@ catkin_package()
 catkin_install_python(PROGRAMS
    scripts/experiment.py
    scripts/mpsf_experiment.py
+   scripts/test_joystick.py
    nodes/sim_ros.py
    nodes/isaac_sim_ros.py
    nodes/mpc_ros.py

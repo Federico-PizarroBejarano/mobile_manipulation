@@ -18,6 +18,7 @@ controller:
     enabled: True
     collision_link_names:
       static_obstacles:
+        - "ground"
         - "obstacle_cylinder_1_link"
         - "obstacle_cylinder_2_link"
     urdf:

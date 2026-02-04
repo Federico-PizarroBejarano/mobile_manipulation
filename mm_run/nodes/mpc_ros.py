@@ -77,7 +77,7 @@ class ControllerROSNode:
             )
 
         self.ctrl_config = config["controller"]
-        self.planner_config = config["planner"].copy()
+        self.planner_config = config.get("planner", {}).copy()
         print(self.ctrl_config["type"])
         # controller
         control_class = getattr(MPC, self.ctrl_config["type"], None)
@@ -128,9 +128,10 @@ class ControllerROSNode:
 
         self.start_end_button_interface = JoystickButtonInterface(2)  # square
 
+        self.teleop_enabled = False
         if self.planner_config.get("use_joy", False):
             self.use_joy = True
-            self.joystick_interface = JoystickButtonInterface(1)  # circle
+            self.task_switch_button_interface = JoystickButtonInterface(1)  # circle
         else:
             self.use_joy = False
 
@@ -190,6 +191,10 @@ class ControllerROSNode:
 
         rospy.on_shutdown(self.shutdownhook)
         self.ctrl_c = False
+
+        # Allow child classes to do additional initialization before run()
+        self._post_init()
+
         self.run()
 
     def shutdownhook(self):
@@ -225,6 +230,10 @@ class ControllerROSNode:
     def _publish_trajectory_tracking_pt(self, t, robot_states, planner):
         msg = MultiDOFJointTrajectory()
         msg.header.stamp = rospy.Time.now()
+
+        # Return early if no planner
+        if planner is None:
+            return
 
         # Get base reference if available
         if planner.has_base_ref:
@@ -369,7 +378,7 @@ class ControllerROSNode:
 
         planner = self.sot.getPlanner()
         # Visualize current base waypoint/path if available
-        if planner.has_base_ref:
+        if planner is not None and planner.has_base_ref:
             if planner.ref_type == RefType.WAYPOINT:
                 quat = tf.quaternion_from_euler(0, 0, planner.base_target[2])
                 pose_msg = PoseStamped()
@@ -391,7 +400,7 @@ class ControllerROSNode:
                 self.current_plan_visualization_pub.publish(marker_plan)
 
         # Visualize current EE waypoint/path if available
-        if planner.has_ee_ref:
+        if planner is not None and planner.has_ee_ref:
             if planner.ref_type == RefType.WAYPOINT:
                 quat = tf.quaternion_from_euler(*planner.ee_target[3:])
                 pose_msg = PoseStamped()
@@ -458,7 +467,9 @@ class ControllerROSNode:
 
         states = (self.robot_interface.q, self.robot_interface.v)
         print(f"robot coord: {self.robot_interface.q}")
-        self.sot = TaskManager(self.planner_config.copy())
+        self.sot = TaskManager(
+            self.planner_config if self.planner_config.get("tasks") else None
+        )
 
         print("-----Checking Planners----- ")
         for planner in self.sot.planners:
@@ -502,16 +513,19 @@ class ControllerROSNode:
 
         print("-----Checking Joy stick messages----- ")
         if self.use_joy:
-            if self.joystick_interface.ready():
+            # Check if teleop mode is enabled (uses direct joystick subscription, not JoystickButtonInterface)
+            if self.teleop_enabled:
+                # In teleop mode, we use direct joystick subscription, so skip the interface check
+                print("Teleop mode enabled - using direct joystick subscription.")
+            elif self.task_switch_button_interface.ready():
                 print("Received joystick msg. Using joystick data.")
             else:
-                self.use_joy = False
-                print("Did not receive joystick msg.")
+                raise Exception("Joystick not ready")
 
         rospy.Timer(rospy.Duration(0, int(1e8)), self._publish_planner_data)
 
         if self.use_joy:
-            print("----- Press Square(Ps4) to start -----")
+            print("----- Press start button (Square/PS4 or X/XBOX) to start -----")
             while not self.start_end_button_interface.button == 1:
                 rate.sleep()
 
@@ -564,7 +578,7 @@ class ControllerROSNode:
             # Check if any active planner is close to finish
             self.sot_lock.acquire()
             planner = self.sot.getPlanner()
-            close_to_goal = planner.closeToFinish()
+            close_to_goal = planner.closeToFinish() if planner is not None else False
             self.sot_lock.release()
             if close_to_goal:
                 print("Close to goal. Braking")
@@ -638,9 +652,9 @@ class ControllerROSNode:
                 "EE": {"pose": ee_pose, "velocity": ee_vel},
             }
             if self.use_joy:
-                self.joystick_interface.button_lock.acquire()
-                button = self.joystick_interface.button
-                self.joystick_interface.button_lock.release()
+                self.task_switch_button_interface.button_lock.acquire()
+                button = self.task_switch_button_interface.button
+                self.task_switch_button_interface.button_lock.release()
                 states["joy"] = button
 
             self.sot_lock.acquire()
@@ -658,7 +672,7 @@ class ControllerROSNode:
                 rospy.set_param("/controller_finished", True)
 
             if self.use_joy and updated:
-                self.joystick_interface.reset_button()
+                self.task_switch_button_interface.reset_button()
 
             # log
             self.logger.append("ts", t)
@@ -761,6 +775,14 @@ class ControllerROSNode:
     def log_mpc_info(self, logger, controller):
         for key, val in controller.log.items():
             logger.append("_".join(["mpc", key]) + "s", val)
+
+    def _post_init(self):
+        """Hook method called after initialization but before run().
+
+        Child classes can override this to perform additional initialization
+        that requires access to self.ctrl_config and other parent attributes.
+        """
+        pass
 
     def update_references(self, references, robot_states):
         """Update the references for the controller.

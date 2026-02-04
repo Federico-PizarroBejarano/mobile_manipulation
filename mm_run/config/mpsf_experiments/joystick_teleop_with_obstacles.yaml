@@ -1,7 +1,4 @@
-# MPSF Experiment 1: EE Teleoperation with Base Collision Avoidance
-# The planner commands EE velocity along a path that would cause the base to collide
-# with obstacles. The MPSF must correct the base motion to zigzag through obstacles
-# while the EE follows the teleoperator's commands.
+# MPSF Experiment: Joystick Teleop with Obstacles
 
 controller:
   base_mask: [false, false, false]
@@ -10,10 +7,12 @@ controller:
   mpsf_params:
     objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1)
     decay_rate: 1.0         # Decay factor per time step (0 to 1)
-    mpsf_base_mask: [false, false, false]  # MPSF controls base to avoid obstacles
-    mpsf_ee_mask: [true, true, true, false, false, false]  # EE follows planner
     mpsf_weight_multiplier: 1.0
-    mpsf_ee_goal: [5, 0, 0.7, 0, 0, 0]  # [x, y, z, roll, pitch, yaw]
+    teleop_enabled: True
+    teleop_max_base_vel: [1.0, 1.0, 1.0]  # [vx, vy, vyaw] max velocities
+    teleop_max_ee_vel: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]  # [vx, vy, vz, wx, wy, wz] max EE velocities
+    mpsf_base_mask: [true, true, true]
+    mpsf_ee_mask: [true, true, true, true, true, true]
 
   # Enable collision avoidance
   self_collision_avoidance_enabled: True
@@ -21,10 +20,10 @@ controller:
 
   # ACADOS solver option
   acados:
-    name: "MPSF_EE_Teleop_Base_Collision"
+    name: "MPSF_Joystick_Teleop_With_Obstacles"
 
 simulation:
-  duration: 6
+  duration: 60
 
 include:
   - package: "mm_run"
@@ -37,5 +36,5 @@ include:
     path: "config/mpsf_experiments/scenes/ee_teleop_obstacles_scene.yaml"
 
 logging:
-  log_dir: "mpsf_experiments/ee_teleop_base_collision"
+  log_dir: "mpsf_experiments/joystick_teleop_with_obstacles"
   log_level: 20  # INFO level
