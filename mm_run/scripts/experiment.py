@@ -13,6 +13,7 @@ from mm_simulator import simulation
 from mm_utils import parsing
 from mm_utils.logging import DataLogger
 from mm_utils.math import compute_velocity_command
+from mm_utils.metrics import extract_robot_states
 
 
 def main():
@@ -158,21 +159,8 @@ def main():
         robot.command_velocity(u)
         t, _ = sim.step(t)
 
-        # Convert to pose arrays in world frame
-        ee_curr_pos, ee_cur_orn = robot.link_pose()
-        ee_euler = Rot.from_quat(ee_cur_orn).as_euler("xyz")
-        ee_pose = np.hstack([ee_curr_pos, ee_euler])
-
-        ee_lin_vel, ee_ang_vel = robot.link_velocity()
-        ee_vel = np.hstack([ee_lin_vel, ee_ang_vel])  # [vx, vy, vz, wx, wy, wz]
-
-        base_pose = robot_states[0][:3]  # [x, y, yaw] already in world frame
-        base_vel = robot_states[1][:3]  # [vx, vy, vyaw]
-
-        states = {
-            "base": {"pose": base_pose, "velocity": base_vel},
-            "EE": {"pose": ee_pose, "velocity": ee_vel},
-        }
+        # Extract robot states using shared utility function
+        states = extract_robot_states(robot, robot_states)
 
         # Pass MPC masks to TaskManager for task completion checks
         sot.update(
@@ -180,7 +168,9 @@ def main():
         )
 
         # log
-        v_ew_w, ω_ew_w = robot.link_velocity()
+        # Use extracted states instead of calling link_velocity() again
+        v_ew_w = states["EE"]["velocity"][:3]
+        ω_ew_w = states["EE"]["velocity"][3:]
 
         # Get tracking points from references
         r_ew_wd = None
@@ -204,11 +194,13 @@ def main():
         logger.append("xs", np.hstack(robot_states))
         logger.append("controller_run_time", t1 - t0)
         logger.append("cmd_vels", u)
-        logger.append("r_ew_ws", ee_curr_pos)
-        logger.append("Q_wes", ee_cur_orn)
+        logger.append("r_ew_ws", states["EE"]["pose"][:3])
+        # Convert Euler angles back to quaternion for logging
+        ee_quat = Rot.from_euler("xyz", states["EE"]["pose"][3:]).as_quat()
+        logger.append("Q_wes", ee_quat)
         logger.append("v_ew_ws", v_ew_w)
         logger.append("ω_ew_ws", ω_ew_w)
-        logger.append("r_bw_ws", robot_states[0][:2])
+        logger.append("r_bw_ws", states["base"]["pose"][:2])
 
         if r_bw_wd is not None:
             if r_bw_wd.shape[0] == 2:
@@ -216,7 +208,7 @@ def main():
             elif r_bw_wd.shape[0] == 3:
                 logger.append("r_bw_w_ds", r_bw_wd[:2])
                 logger.append("yaw_bw_w_ds", r_bw_wd[2])
-                logger.append("yaw_bw_ws", robot_states[0][2])
+                logger.append("yaw_bw_ws", states["base"]["pose"][2])
         if v_bw_wd is not None:
             if v_bw_wd.shape[0] == 2:
                 logger.append("v_bw_w_ds", v_bw_wd)

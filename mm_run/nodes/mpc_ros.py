@@ -192,15 +192,23 @@ class ControllerROSNode:
         rospy.on_shutdown(self.shutdownhook)
         self.ctrl_c = False
 
-        # Allow child classes to do additional initialization before run()
-        self._post_init()
-
-        self.run()
-
     def shutdownhook(self):
         self.ctrl_c = True
         self.robot_interface.brake()
         self.logger.save(session_timestamp=self.session_timestamp)
+
+    def _compute_cmd_vel(self, t_elapsed):
+        """Compute current velocity command from interpolated plan.
+
+        Args:
+            t_elapsed (float): Time elapsed since plan was set.
+
+        Returns:
+            np.ndarray: Current velocity command (nu,).
+        """
+        if self.mpc_plan_interp is None:
+            return np.zeros(self.controller.robot.ssSymMdl["nu"])
+        return self.mpc_plan_interp(t_elapsed)
 
     def _publish_cmd_vel_integration(self, event):
         if self.mpc_plan is not None:
@@ -209,7 +217,7 @@ class ControllerROSNode:
             self.lock.acquire()
             t_elapsed = t - self.mpc_plan_time_stamp
             self.cmd_vel += (
-                self.mpc_plan_interp(t_elapsed)
+                self._compute_cmd_vel(t_elapsed)
                 * (event.current_real - event.last_real).to_sec()
             )
 
@@ -222,7 +230,7 @@ class ControllerROSNode:
             t = rospy.Time.now().to_sec()
             self.lock.acquire()
             t_elapsed = t - self.mpc_plan_time_stamp
-            self.cmd_vel = self.mpc_plan_interp(t_elapsed)
+            self.cmd_vel = self._compute_cmd_vel(t_elapsed)
             self.lock.release()
 
         self.robot_interface.publish_cmd_vel(self.cmd_vel)
@@ -610,6 +618,10 @@ class ControllerROSNode:
             self.mpc_plan = mpc_plan
             self.mpc_plan_time_stamp = t
             self.mpc_plan_interp = mpc_plan_interp
+            # Update cmd_vel synchronously using the same helper method as timer callbacks
+            # This ensures cmd_vel is current when the hook is called
+            t_elapsed = 0.0  # At the moment of update, elapsed time is 0
+            self.cmd_vel = self._compute_cmd_vel(t_elapsed)
             self.lock.release()
 
             # publish data
@@ -674,6 +686,16 @@ class ControllerROSNode:
             if self.use_joy and updated:
                 self.task_switch_button_interface.reset_button()
 
+            # Call hook for child classes (e.g., metrics collection)
+            # Use the pre-computed cmd_vel that was updated above
+            self._after_control_step(
+                t - t0,
+                robot_states,
+                states,
+                references,
+                self.cmd_vel,
+            )
+
             # log
             self.logger.append("ts", t)
             self.log_mpc_info(self.logger, self.controller)
@@ -731,8 +753,6 @@ class ControllerROSNode:
         self.cmd_vel_timer.shutdown()
         self.mpc_plan = None
 
-        # self.go_home()
-
     def go_home(self):
         rate = rospy.Rate(125)
         q = self.robot_interface.q
@@ -776,20 +796,27 @@ class ControllerROSNode:
         for key, val in controller.log.items():
             logger.append("_".join(["mpc", key]) + "s", val)
 
-    def _post_init(self):
-        """Hook method called after initialization but before run().
-
-        Child classes can override this to perform additional initialization
-        that requires access to self.ctrl_config and other parent attributes.
-        """
-        pass
-
     def update_references(self, references, robot_states):
         """Update the references for the controller.
 
         Args:
             references (dict): The references to update.
             robot_states (tuple): The robot states.
+        """
+        pass
+
+    def _after_control_step(self, t, robot_states, states, references, u_current):
+        """Hook method called after each control step, before logging.
+
+        Child classes can override this to perform additional processing,
+        such as metrics collection, after each control iteration.
+
+        Args:
+            t (float): Current time relative to experiment start.
+            robot_states (tuple): (q, v) tuple from robot interface.
+            states (dict): Dictionary with "base" and "EE" keys containing pose and velocity.
+            references (dict): Current references dictionary.
+            u_current (np.ndarray): Current velocity command (nu,).
         """
         pass
 

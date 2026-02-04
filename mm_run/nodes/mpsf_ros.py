@@ -30,6 +30,9 @@ from scipy.spatial.transform import Rotation as Rot  # noqa: E402
 from scripts.mpsf_experiment import calculate_desired_velocity  # noqa: E402
 from sensor_msgs.msg import Joy  # noqa: E402
 
+# Import metrics collection
+from mm_utils.metrics import MPSFMetricsCollector  # noqa: E402
+
 
 class MPSFControllerROSNode(ControllerROSNode):
     """ROS node for MPSF (Model Predictive Shared Framework) experiments.
@@ -55,10 +58,15 @@ class MPSFControllerROSNode(ControllerROSNode):
         self.teleop_control_mode = "base"  # "base" or "ee"
         self._last_toggle_button_state = False  # Track button 0 (A) state for toggle
 
+        # Metrics collection
+        self.metrics_collector = MPSFMetricsCollector()
+        self._current_references = None
+        self._current_desired_base_vel = None
+        self._current_desired_ee_vel = None
+        self._sim_timestep = None
+
         super().__init__()
 
-    def _post_init(self):
-        """Post-initialization hook: set up joystick teleoperation after parent init."""
         # Subscribe to joystick messages for teleoperation
         self.joy_sub = rospy.Subscriber("/teleop/joy", Joy, self._joy_callback)
 
@@ -66,6 +74,10 @@ class MPSFControllerROSNode(ControllerROSNode):
         mpsf_params = self.ctrl_config.get("mpsf_params")
         self.teleop_enabled = mpsf_params.get("teleop_enabled", False)
         self.use_joy = self.teleop_enabled
+
+        # Get simulation timestep for metrics (use controller dt as fallback)
+        sim_config = self.ctrl_config.get("simulation", {})
+        self._sim_timestep = sim_config.get("timestep", getattr(self, "mpc_dt", 0.01))
 
         if self.teleop_enabled:
             rospy.loginfo("Teleoperation mode enabled - MPSF goals will be ignored")
@@ -244,9 +256,13 @@ class MPSFControllerROSNode(ControllerROSNode):
             if self.teleop_control_mode == "ee":
                 desired_ee_vel = self._joystick_to_ee_velocity()
                 desired_velocity = {"ee_velocity": desired_ee_vel}
+                self._current_desired_base_vel = None
+                self._current_desired_ee_vel = desired_ee_vel
             else:  # base mode
                 desired_base_vel = self._joystick_to_base_velocity()
                 desired_velocity = {"base_velocity": desired_base_vel}
+                self._current_desired_base_vel = desired_base_vel
+                self._current_desired_ee_vel = None
             references["desired_velocity"] = desired_velocity
             print(f"desired_velocity ({self.teleop_control_mode}): {desired_velocity}")
         else:
@@ -272,6 +288,10 @@ class MPSFControllerROSNode(ControllerROSNode):
                 self.base_goal, self.ee_goal, states, self.controller
             )
 
+            # Store desired velocities for metrics collection
+            self._current_desired_base_vel = desired_base_vel
+            self._current_desired_ee_vel = desired_ee_vel
+
             # Add desired velocities to references if not None
             desired_velocity = {}
             if desired_base_vel is not None:
@@ -280,9 +300,27 @@ class MPSFControllerROSNode(ControllerROSNode):
                 desired_velocity["ee_velocity"] = desired_ee_vel
             references["desired_velocity"] = desired_velocity
 
+        # Store references for metrics collection
+        self._current_references = references
+
+    def _after_control_step(self, t, robot_states, states, references, u_current):
+        """Override to collect metrics after each control step."""
+        if self._current_references is not None:
+            self.metrics_collector.update(
+                self._current_references,
+                states,
+                u_current,
+                self._current_desired_base_vel,
+                self._current_desired_ee_vel,
+                self.controller,
+                robot_states,
+                self._sim_timestep,
+            )
+
 
 if __name__ == "__main__":
     rospy.init_node("controller_ros_mpsf")
 
     node = MPSFControllerROSNode()
     node.run()
+    node.metrics_collector.print_summary()
