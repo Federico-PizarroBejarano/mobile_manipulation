@@ -571,12 +571,37 @@ class ManipulabilityCostFunction(CostFunctions):
         self.p_struct = casadi_sym_struct(self.p_dict)
         self.p_sym = self.p_struct.cat
 
-        self.J_eqn = (
-            robot_mdl.arm_manipulability_fcn(robot_mdl.q_sym) ** 2
-            * self.p_dict["w"]
-            * 0.5
+        # Extract joint positions q from state x (first DoF elements)
+        nq = robot_mdl.DoF
+        q_from_x = self.x_sym[:nq]
+
+        # Use the robot model's manipulability function (now uses Frobenius norm for code generation)
+        manipulability = robot_mdl.arm_manipulability_fcn(q_from_x)
+        # Square for better sensitivity to low manipulability, then negate to maximize
+        # Higher manipulability = lower cost (we're minimizing, so negate to maximize manipulability)
+        self.J_eqn = -(manipulability**2) * self.p_dict["w"] * 0.5
+        self.J_fcn = cs.Function(
+            "J_" + self.name,
+            [self.x_sym, self.u_sym, self.p_sym],
+            [self.J_eqn],
         )
-        self.J_fcn = cs.Function("fee", [robot_mdl.x_sym], [self.J_eqn])
+
+        # Compute Hessian approximation: d^2J/dx^2
+        # Since manipulability only depends on q (first nq elements of x),
+        # we compute the Hessian w.r.t. x (which will be zero for velocity components)
+        # Use jacobian of gradient for Hessian
+        dJ_dx = cs.jacobian(self.J_eqn, self.x_sym)
+        H_approx = cs.jacobian(dJ_dx, self.x_sym)
+        # Add zero block for control inputs: [0, 0; 0, H_approx]
+        # Use blockcat with 4 separate blocks
+        H_approx_full = cs.blockcat(
+            cs.MX.zeros(nu, nu), cs.MX.zeros(nu, nx), cs.MX.zeros(nx, nu), H_approx
+        )
+        self.H_approx_fcn = cs.Function(
+            "H_approx_" + self.name,
+            [self.x_sym, self.u_sym, self.p_sym],
+            [H_approx_full],
+        )
 
 
 # Cost Function Registry

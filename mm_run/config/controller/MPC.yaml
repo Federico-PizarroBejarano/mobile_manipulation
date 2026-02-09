@@ -75,6 +75,11 @@ controller:
     # Regularization cost (optional)
     Regularization:
       eps: 1.0e-06
+    # Manipulability cost - encourages high arm manipulability while maintaining safety
+    # This helps the arm maintain good dexterity while avoiding obstacles
+    # Manipulability:
+    #   w: 0.005  # Weight for manipulability cost
+
     slack:
       z: 10  # linear term
       Z: 1    # quadratic term

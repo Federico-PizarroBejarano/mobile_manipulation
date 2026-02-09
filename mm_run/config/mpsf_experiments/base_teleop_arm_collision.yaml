@@ -20,12 +20,19 @@ controller:
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
 
+  # Cost function parameters (extends MPC.yaml)
+  cost_params:
+    # Manipulability cost - encourages high arm manipulability while maintaining safety
+    # This helps the arm maintain good dexterity while avoiding obstacles
+    Manipulability:
+      w: 0.01  # Weight for manipulability cost (tune based on desired behavior)
+
   # ACADOS solver option
   acados:
     name: "MPSF_Base_Teleop_Arm_Collision"
 
 simulation:
-  duration: 5  # Longer duration to see arm avoidance behavior
+  duration: 10  # Longer duration to see arm avoidance behavior
   robot:
     home: [0, 0, 0, 0.99pi, -0.7854,  1.5708, -0.7854,  1.5708, 1.3100] # default
 

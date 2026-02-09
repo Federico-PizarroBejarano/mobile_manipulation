@@ -14,5 +14,5 @@ cylinder:
   - name: "cylinder_2"
     radius: 0.25
     length: 1.0
-    xyz: [2.2, 0.8, 0.6]  # To the left, at arm height
+    xyz: [2.2, 0.7, 0.6]  # To the left, at arm height
     rpy: [0, 0, 0]

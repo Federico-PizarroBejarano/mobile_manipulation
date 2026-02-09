@@ -60,6 +60,17 @@ class MPC(MPCBase):
             )
         )
 
+        # Optional manipulability cost (encourages high arm manipulability)
+        if "Manipulability" in cost_params:
+            costs.append(
+                CostFunctionRegistry.create(
+                    "Manipulability", self.robot, cost_params.get("Manipulability", {})
+                )
+            )
+            self.manipulability_enabled = True
+        else:
+            self.manipulability_enabled = False
+
         # Add collision costs/constraints
         constraints = []
         for name in self.collision_link_names:
@@ -168,6 +179,13 @@ class MPC(MPCBase):
             for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]
         ]
 
+        # Pre-compute manipulability params (constant)
+        if self.manipulability_enabled:
+            manipulability_params = self.params["cost_params"].get("Manipulability", {})
+            self._manipulability_weight = manipulability_params.get("w", 1.0)
+        else:
+            self._manipulability_weight = None
+
     def _set_control_effort_params(self, curr_p_map):
         """Set ControlEffort cost function parameters in the parameter map.
 
@@ -179,6 +197,15 @@ class MPC(MPCBase):
             self._control_effort_param_names, self._control_effort_param_values
         ):
             curr_p_map[param_name] = param_value
+
+    def _set_manipulability_params(self, curr_p_map):
+        """Set Manipulability cost function parameters in the parameter map.
+
+        Args:
+            curr_p_map (casadi.struct_MX): Current parameter map to update.
+        """
+        if self.manipulability_enabled and self._manipulability_weight is not None:
+            curr_p_map["w_Manipulability"] = self._manipulability_weight
 
     def control(
         self,
@@ -389,6 +416,7 @@ class MPC(MPCBase):
             self._set_initial_guess(curr_p_map, i, x_bar_initial, u_bar_initial)
             self._set_tracking_params(curr_p_map, r_bar_map, i)
             self._set_control_effort_params(curr_p_map)
+            self._set_manipulability_params(curr_p_map)
             self._set_ocp_params(curr_p_map, i)
             curr_p_map_bar.append(curr_p_map)
 
