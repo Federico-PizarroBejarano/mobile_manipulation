@@ -1,34 +1,18 @@
 #!/usr/bin/env python3
 
-import os
-import sys
+import threading
 
-# Add paths for imports when running as ROS node
-# Get the directory containing this file (nodes/)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# Add nodes directory to path for mpc_ros import
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
-# Add parent directory (mm_run) to path for scripts import
-mm_run_dir = os.path.dirname(current_dir)
-if mm_run_dir not in sys.path:
-    sys.path.insert(0, mm_run_dir)
+import numpy as np
+import rospy
+from mobile_manipulation_central.ros_interface import JoystickButtonInterface
+from scipy.spatial.transform import Rotation as Rot
+from sensor_msgs.msg import Joy
 
-import threading  # noqa: E402
-
-import numpy as np  # noqa: E402
-import rospy  # noqa: E402
-from mobile_manipulation_central.ros_interface import (  # noqa: E402
-    JoystickButtonInterface,
-)
-
-# Import the base controller node (same directory)
-from mpc_ros import ControllerROSNode  # noqa: E402
-from scipy.spatial.transform import Rotation as Rot  # noqa: E402
+# Import the base controller node
+from mm_run.nodes.mpc_ros import ControllerROSNode
 
 # Import MPSF-specific functions
-from scripts.mpsf_experiment import calculate_desired_velocity  # noqa: E402
-from sensor_msgs.msg import Joy  # noqa: E402
+from mm_run.scripts.mpsf_experiment import calculate_desired_velocity
 
 # Import metrics collection
 from mm_utils.metrics import MPSFMetricsCollector  # noqa: E402
