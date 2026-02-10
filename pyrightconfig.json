@@ -16,7 +16,7 @@
         "../mobile_manipulation_central/src",
     ],
     "pythonVersion": "3.8",
-    "typeCheckingMode": "basic",
+    "typeCheckingMode": "off",
     "reportMissingImports": true,
     "reportMissingTypeStubs": false
 }

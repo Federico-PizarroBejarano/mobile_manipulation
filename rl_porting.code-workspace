@@ -1,0 +1,11 @@
+{
+    "folders": [
+        {
+            "path": "."
+        },
+        {
+            "path": "../../../catkin_ws2/src/modulation_rl"
+        }
+    ],
+    "settings": {}
+}

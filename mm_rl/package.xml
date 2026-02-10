@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>mm_rl</name>
+  <version>0.0.0</version>
+  <description>Reinforcement learning training for mobile manipulation</description>
+
+  <maintainer email="todo@todo.todo">Maintainer</maintainer>
+  <license>MIT</license>
+
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>mm_simulator</depend>
+  <depend>mm_utils</depend>
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <export>
+  </export>
+</package>

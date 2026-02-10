@@ -1,0 +1,47 @@
+# RL Training Configuration
+
+rl:
+  max_steps: 1000000  # Total training steps
+  start_steps: 10000  # Random actions before training starts
+  update_after: 1000  # Start updating networks after N steps
+  update_freq: 1  # Update networks every N steps
+  eval_freq: 10000  # Frequency of evaluation episodes
+  save_freq: 50000  # Frequency of checkpoint saving
+
+  sac:
+    lr: 3.0e-4  # Learning rate
+    gamma: 0.99  # Discount factor
+    tau: 0.005  # Soft update coefficient for target networks
+    alpha: 0.2  # Initial entropy coefficient (if not auto-tuning)
+    auto_alpha: true  # Automatically tune entropy coefficient
+    batch_size: 256  # Batch size for training
+    hidden_dim: 256  # Hidden layer dimension for networks
+
+# Goal generation parameters
+goal:
+  pos_range:  # Goal position range [min, max] for [x, y, z] in meters
+    - [-1.0, -1.0, 0.3]
+    - [1.0, 1.0, 1.0]
+  orn_range: 0.1  # Orientation range in radians
+  success_pos_threshold: 0.05  # Position success threshold in meters
+  success_orn_threshold: 0.1  # Orientation success threshold (quaternion distance)
+
+# Reward parameters
+reward:
+  rot_weight: 0.5  # Weight for orientation error relative to position error in IK reward
+  ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik in paper)
+  acceleration_penalty_multiplier: 0.01  # Multiplier for acceleration penalty (λ_acc in paper)
+
+# Simulation parameters (can be overridden by including simulation config)
+simulation:
+  max_episode_steps: 1000  # Maximum steps per episode
+  timestep: 0.03
+  duration: 25.0
+  gravity: [0, 0, -9.81]
+  gui: false
+
+  static_obstacles:
+    enabled: false
+
+  dynamic_obstacles:
+    enabled: false
