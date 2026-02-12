@@ -57,6 +57,13 @@ class BaseRLEnv(gym.Env):
         self.joint_vel_lower = np.array(velocity_limits["lower"][self.nq :])
         self.joint_vel_upper = np.array(velocity_limits["upper"][self.nq :])
 
+        # IK solver parameters (N²M² paper: minimum displacement regularization)
+        ik_config = config.get("ik", {})
+        self.ik_regularization_strength = ik_config.get("regularization_strength", 0.1)
+        self.use_weighted_regularization = ik_config.get(
+            "use_weighted_regularization", True
+        )
+
         # End-effector planner (will be initialized in reset)
         self.ee_planner = None
 
@@ -76,6 +83,26 @@ class BaseRLEnv(gym.Env):
         # Goal (will be set by task)
         self.goal_pos = None
         self.goal_orn = None
+
+        # Intermediate goal parameters (N²M² paper: observe intermediate goal ~1.5m ahead)
+        goal_config = config.get("goal", {})
+        self.use_intermediate_goal = goal_config.get("use_intermediate_goal", True)
+        self.intermediate_goal_distance = goal_config.get(
+            "intermediate_goal_distance", 1.5
+        )
+
+        # Early termination tracking (N²M² paper: terminate if deviates too much for 20+ steps)
+        termination_config = config.get("termination", {})
+        self.deviation_pos_threshold = termination_config.get(
+            "deviation_pos_threshold", 0.15
+        )
+        self.deviation_orn_threshold = termination_config.get(
+            "deviation_orn_threshold", 0.3
+        )
+        self.max_consecutive_deviation_steps = termination_config.get(
+            "max_consecutive_deviation_steps", 20
+        )
+        self.consecutive_deviation_steps = 0
 
     def _get_observation_dim(self):
         """Get observation dimension. Override in subclasses if needed.
@@ -127,10 +154,22 @@ class BaseRLEnv(gym.Env):
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Transform goal pose to base frame
-        goal_pos_b, goal_orn_b = self._world_to_base_frame(
-            self.goal_pos, self.goal_orn, base_pos_w, base_orn_w
-        )
+        # N²M² paper: use intermediate goal ~1.5m ahead instead of final goal
+        # "we do not let the agent observe the final end-effector goal which can often
+        # be far away, but we repeatedly apply the end-effector motion generator fee
+        # to generate an intermediate goal roughly 1.5 m ahead of the agent."
+        if self.use_intermediate_goal and self.ee_planner is not None:
+            intermediate_goal_pos_w, intermediate_goal_orn_w = (
+                self.ee_planner.get_intermediate_goal(self.intermediate_goal_distance)
+            )
+            goal_pos_b, goal_orn_b = self._world_to_base_frame(
+                intermediate_goal_pos_w, intermediate_goal_orn_w, base_pos_w, base_orn_w
+            )
+        else:
+            # Use final goal (original behavior)
+            goal_pos_b, goal_orn_b = self._world_to_base_frame(
+                self.goal_pos, self.goal_orn, base_pos_w, base_orn_w
+            )
 
         # Get EE velocities (v_{ee}) from planner command (teleoperator), not actual robot velocity
         # Transform commanded velocity to base frame
@@ -201,6 +240,9 @@ class BaseRLEnv(gym.Env):
         # Reset step counter
         self.current_step = 0
 
+        # Reset deviation tracking
+        self.consecutive_deviation_steps = 0
+
         # Initialize/reset end-effector planner if goal is set
         ee_pos, ee_orn = self.sim.robot.link_pose()
         self.ee_planner = EEPlanner(
@@ -263,6 +305,28 @@ class BaseRLEnv(gym.Env):
         # Get observation
         obs = self._get_observation()
 
+        # Check deviation from desired pose (for early termination)
+        # N²M² paper: terminate if gripper deviates too much for 20+ consecutive steps
+        ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
+        desired_ee_pos_w, desired_ee_orn_w = self.ee_planner.get_desired_pose()
+
+        # Compute position deviation
+        pos_deviation = np.linalg.norm(ee_pos_w - desired_ee_pos_w)
+
+        # Compute orientation deviation (quaternion distance)
+        q_dot = np.abs(np.dot(ee_orn_w, desired_ee_orn_w))
+        orn_deviation = 1.0 - q_dot
+
+        # Check if deviation exceeds thresholds
+        if (
+            pos_deviation > self.deviation_pos_threshold
+            or orn_deviation > self.deviation_orn_threshold
+        ):
+            self.consecutive_deviation_steps += 1
+        else:
+            # Reset counter if within threshold
+            self.consecutive_deviation_steps = 0
+
         # Compute reward (to be implemented by subclasses)
         reward = self._compute_reward(action, self.prev_action)
         # Store action for next observation (a_{t-1})
@@ -276,6 +340,12 @@ class BaseRLEnv(gym.Env):
         info = {
             "step": self.current_step,
             "time": next_t,
+            "consecutive_deviation_steps": self.consecutive_deviation_steps,
+            "terminated_by_deviation": (
+                terminated
+                and self.consecutive_deviation_steps
+                >= self.max_consecutive_deviation_steps
+            ),
         }
 
         return obs, reward, terminated, truncated, info
@@ -326,9 +396,9 @@ class BaseRLEnv(gym.Env):
     ):
         """Solve inverse kinematics to get joint velocities.
 
-        Uses Jacobian-based IK to compute joint velocities that achieve
-        the desired end-effector velocity while respecting base velocities.
-        The EEPlanner commands end-effector velocity directly (teleoperator).
+        Uses Jacobian-based IK with minimum displacement regularization weighted by
+        maximum joint velocities (N²M² paper approach). This prefers solutions that
+        keep joints close to their current positions, with faster joints penalized less.
 
         Args:
             desired_ee_vel: Desired end-effector velocity [lin_vel(3), ang_vel(3)] in world frame (6,)
@@ -377,21 +447,47 @@ class BaseRLEnv(gym.Env):
         # Remaining desired velocity for arm to achieve
         v_ee_arm_desired = desired_ee_vel_clamped - v_ee_from_base
 
-        # Solve for arm joint velocities using pseudo-inverse
+        # Solve for arm joint velocities
         arm_joint_indices = list(range(3, self.nu))  # Arm joints (3-8)
         J_arm = J[:, arm_joint_indices]
-        # Use damped least squares for numerical stability
-        damping = 0.01
-        J_arm_pinv = J_arm.T @ np.linalg.inv(
-            J_arm @ J_arm.T + damping * np.eye(J_arm.shape[0])
-        )
-        arm_vel = J_arm_pinv @ v_ee_arm_desired
+
+        if self.use_weighted_regularization:
+            # N²M² paper approach: minimum displacement regularization weighted by 1/max_velocity
+            # Minimize: ||J_arm * q_dot - v_ee_arm_desired||² + λ * ||W * q_dot||²
+            # where W_ii = 1 / max_vel_i
+
+            # Get max velocities for arm joints
+            max_vels_arm = self.joint_vel_upper[arm_joint_indices]
+            # Avoid division by zero and ensure positive values
+            max_vels_arm = np.maximum(np.abs(max_vels_arm), 1e-6)
+
+            # Build weight matrix: W_ii = 1 / max_vel_i
+            # This means faster joints (higher max_vel) get less penalty
+            W = np.diag(1.0 / max_vels_arm)
+
+            # Weighted regularization term: W^T * W (since W is diagonal, this is W^2)
+            W_squared = W.T @ W
+
+            # Solve: (J_arm^T * J_arm + λ * W^T * W) * q_dot = J_arm^T * v_ee_arm_desired
+            A = J_arm.T @ J_arm + self.ik_regularization_strength * W_squared
+            b = J_arm.T @ v_ee_arm_desired
+
+            # Use pseudo-inverse for numerical stability
+            arm_vel = np.linalg.pinv(A) @ b
+        else:
+            # Fallback to simple damped least squares (original approach)
+            damping = 0.01
+            J_arm_pinv = J_arm.T @ np.linalg.inv(
+                J_arm @ J_arm.T + damping * np.eye(J_arm.shape[0])
+            )
+            arm_vel = J_arm_pinv @ v_ee_arm_desired
 
         # Combine all joint velocities
         joint_velocities = np.zeros(self.nu)
         joint_velocities[base_joint_indices] = base_vel
         joint_velocities[arm_joint_indices] = arm_vel
 
+        # Clip to limits
         for i in range(self.nu):
             joint_velocities[i] = np.clip(
                 joint_velocities[i], self.joint_vel_lower[i], self.joint_vel_upper[i]
@@ -415,9 +511,18 @@ class BaseRLEnv(gym.Env):
     def _check_termination(self):
         """Check if episode should terminate. Override in subclasses.
 
+        Checks for:
+        1. Early termination: gripper deviates too much from desired pose for 20+ consecutive steps
+        2. Goal reached (checked by subclasses)
+
         Returns:
             bool: True if episode should terminate
         """
+        # Early termination: deviation too large for too many consecutive steps
+        if self.consecutive_deviation_steps >= self.max_consecutive_deviation_steps:
+            return True
+
+        # Subclasses can override to add goal-based termination
         return False
 
     def close(self):

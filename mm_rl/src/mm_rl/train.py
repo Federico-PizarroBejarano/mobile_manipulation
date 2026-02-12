@@ -129,6 +129,7 @@ def train():
         auto_alpha=sac_config.get("auto_alpha"),
         hidden_dim=sac_config.get("hidden_dim"),
         device=args.device,
+        infinite_horizon=sac_config.get("infinite_horizon", False),
     )
 
     # Training parameters

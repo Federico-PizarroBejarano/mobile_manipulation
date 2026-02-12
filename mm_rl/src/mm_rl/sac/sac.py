@@ -51,6 +51,7 @@ class SAC:
         auto_alpha=True,
         hidden_dim=256,
         device="cpu",
+        infinite_horizon=False,
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -58,6 +59,7 @@ class SAC:
         self.gamma = gamma
         self.tau = tau
         self.device = device
+        self.infinite_horizon = infinite_horizon
 
         # Networks
         self.actor = Actor(state_dim, action_dim, hidden_dim).to(device)
@@ -140,7 +142,16 @@ class SAC:
             target_q = (
                 torch.min(target_q1, target_q2) - self.alpha_value * next_log_probs
             )
-            target_q = rewards + (1 - dones) * self.gamma * target_q
+
+            # N²M² paper: infinite horizon with bootstrapping
+            # Always bootstrap from next state, even at episode end
+            # This treats the task as continuing indefinitely (robots continue to new goals)
+            if self.infinite_horizon:
+                # Always bootstrap: terminal states have value (task continues)
+                target_q = rewards + self.gamma * target_q
+            else:
+                # Standard episodic: no bootstrapping at episode end
+                target_q = rewards + (1 - dones) * self.gamma * target_q
 
         # Current Q-values
         current_q1, current_q2 = self.critic(states, actions_unscaled)

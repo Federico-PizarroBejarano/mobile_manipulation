@@ -16,6 +16,7 @@ rl:
     auto_alpha: true  # Automatically tune entropy coefficient
     batch_size: 256  # Batch size for training
     hidden_dim: 256  # Hidden layer dimension for networks
+    infinite_horizon: true  # N²M² paper: infinite horizon with bootstrapping at episode end
 
 # Goal generation parameters
 goal:
@@ -25,6 +26,8 @@ goal:
   orn_range: 0.1  # Orientation range in radians
   success_pos_threshold: 0.05  # Position success threshold in meters
   success_orn_threshold: 0.1  # Orientation success threshold (quaternion distance)
+  intermediate_goal_distance: 1.5  # N²M² paper: intermediate goal ~1.5m ahead instead of final goal
+  use_intermediate_goal: true  # Use intermediate goal in observation instead of final goal
 
 # Reward parameters
 reward:
@@ -45,3 +48,14 @@ simulation:
 
   dynamic_obstacles:
     enabled: false
+
+# Early termination parameters (N²M² paper: terminate if gripper deviates too much for 20+ steps)
+termination:
+  deviation_pos_threshold: 0.15  # Position deviation threshold in meters
+  deviation_orn_threshold: 0.3  # Orientation deviation threshold (quaternion distance)
+  max_consecutive_deviation_steps: 20  # Max consecutive steps with deviation before termination
+
+# IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
+ik:
+  regularization_strength: 0.1  # Regularization strength (λ) for minimum displacement goal
+  use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping

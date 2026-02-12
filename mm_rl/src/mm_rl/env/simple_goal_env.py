@@ -131,12 +131,20 @@ class SimpleGoalEnv(BaseRLEnv):
         return reward
 
     def _check_termination(self):
-        """Check if goal is reached.
+        """Check if episode should terminate.
+
+        Checks for:
+        1. Early termination: deviation from desired pose (checked by parent)
+        2. Goal reached: current pose within success thresholds
 
         Returns:
-            bool: True if goal is reached
+            bool: True if episode should terminate
         """
-        # Get current end-effector pose
+        # First check for early termination (deviation-based)
+        if super()._check_termination():
+            return True
+
+        # Then check if goal is reached
         ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
 
         # Check position distance
