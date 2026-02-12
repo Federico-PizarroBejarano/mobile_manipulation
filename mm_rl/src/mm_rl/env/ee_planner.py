@@ -10,6 +10,9 @@ class EEPlanner:
 
     The planner commands velocities at a fixed magnitude (set randomly on reset)
     independent of the RL agent's actions, acting as a surrogate teleoperator.
+
+    During training, uses last desired pose instead of current actual pose to
+    prevent RL agent from influencing the trajectory shape.
     """
 
     def __init__(
@@ -30,31 +33,25 @@ class EEPlanner:
         self.dt = dt
         self.np_random = np_random
 
-        # Set on reset
-        self.current_pos = None
-        self.current_orn = None
+        # Track desired pose (not actual robot pose)
+        self.desired_pos = None
+        self.desired_orn = None
         self.planner_vel = None
 
     def reset(self, current_pos, current_orn):
         """Reset planner with current end-effector pose.
 
+        Initializes desired pose to current actual pose at reset.
+
         Args:
             current_pos: Current end-effector position (3,)
             current_orn: Current end-effector orientation quaternion (4,)
         """
-        self.update_current_pose(current_pos, current_orn)
+        # Initialize desired pose to current pose at reset
+        self.desired_pos = np.array(current_pos)
+        self.desired_orn = np.array(current_orn)
         # Set random fixed velocity for this episode
         self.planner_vel = self.np_random.uniform(self.vel_range[0], self.vel_range[1])
-
-    def update_current_pose(self, current_pos, current_orn):
-        """Update planner's current pose with actual robot pose.
-
-        Args:
-            current_pos: Actual current end-effector position (3,)
-            current_orn: Actual current end-effector orientation quaternion (4,)
-        """
-        self.current_pos = np.array(current_pos)
-        self.current_orn = np.array(current_orn)
 
     def step(self):
         """Step planner forward using fixed velocity set on reset.
@@ -64,8 +61,8 @@ class EEPlanner:
         Returns:
             tuple: (desired_lin_vel, desired_ang_vel) in world frame (3,), (3,)
         """
-        # Compute desired linear velocity toward goal
-        pos_error = self.goal_pos - self.current_pos
+        # Compute desired linear velocity toward goal from last desired pose
+        pos_error = self.goal_pos - self.desired_pos
         pos_error_norm = np.linalg.norm(pos_error)
 
         if pos_error_norm > 1e-6:
@@ -77,12 +74,12 @@ class EEPlanner:
             desired_lin_vel = np.zeros(3)
 
         # Compute desired angular velocity toward goal orientation
-        q_dot = np.abs(np.dot(self.current_orn, self.goal_orn))
+        q_dot = np.abs(np.dot(self.desired_orn, self.goal_orn))
         orn_error = 1.0 - q_dot
 
         if orn_error > 1e-6:
             # Compute quaternion difference
-            q_inv = math.quat_inverse(self.current_orn)
+            q_inv = math.quat_inverse(self.desired_orn)
             q_diff = math.quat_multiply(self.goal_orn, q_inv)
 
             # Convert to axis-angle for angular velocity
@@ -96,7 +93,6 @@ class EEPlanner:
                 max_ang_vel = self.planner_vel * ang_vel_scale
 
                 # Desired angular velocity magnitude
-                # If we're close, reduce velocity proportionally
                 desired_ang_vel_mag = min(angle / self.dt, max_ang_vel)
                 desired_ang_vel = axis * desired_ang_vel_mag
             else:
@@ -105,4 +101,27 @@ class EEPlanner:
             # Reached goal orientation
             desired_ang_vel = np.zeros(3)
 
+        # Update desired pose based on computed velocities
+        self.desired_pos = self.desired_pos + desired_lin_vel * self.dt
+
+        # Update desired orientation using quaternion integration
+        if np.linalg.norm(desired_ang_vel) > 1e-6:
+            # Quaternion derivative: q_dot = 0.5 * q * [0, wx, wy, wz]
+            # For small rotations: q_new ≈ q * [1, 0.5*dt*wx, 0.5*dt*wy, 0.5*dt*wz]
+            ang_vel_quat = np.zeros(4)
+            ang_vel_quat[:3] = desired_ang_vel * self.dt / 2.0
+            ang_vel_quat[3] = 1.0
+            # Normalize the delta quaternion
+            ang_vel_quat = ang_vel_quat / np.linalg.norm(ang_vel_quat)
+            # quat_multiply normalizes by default
+            self.desired_orn = math.quat_multiply(self.desired_orn, ang_vel_quat)
+
         return desired_lin_vel, desired_ang_vel
+
+    def get_desired_pose(self):
+        """Get current desired pose from planner.
+
+        Returns:
+            tuple: (desired_pos, desired_orn) in world frame
+        """
+        return self.desired_pos.copy(), self.desired_orn.copy()

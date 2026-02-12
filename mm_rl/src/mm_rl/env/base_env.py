@@ -77,10 +77,6 @@ class BaseRLEnv(gym.Env):
         self.goal_pos = None
         self.goal_orn = None
 
-        # Store desired EE pose for observation
-        self.desired_ee_pos = None
-        self.desired_ee_orn = None
-
     def _get_observation_dim(self):
         """Get observation dimension. Override in subclasses if needed.
 
@@ -122,35 +118,9 @@ class BaseRLEnv(gym.Env):
             ee_pos_w, ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Compute desired EE pose from velocity command (for observation \hat{ee})
-        # Integrate velocity to get desired next pose
-        dt = float(self.sim.timestep)
-        if np.linalg.norm(self.desired_ee_vel) > 1e-6:
-            # Linear: integrate velocity
-            desired_ee_pos_w = ee_pos_w + self.desired_ee_vel[:3] * dt
-
-            # Angular: convert angular velocity to quaternion increment
-            ang_vel = self.desired_ee_vel[3:]
-            ang_vel_norm = np.linalg.norm(ang_vel)
-            if ang_vel_norm > 1e-6:
-                # Create rotation quaternion from angular velocity
-                angle = ang_vel_norm * dt
-                axis = ang_vel / ang_vel_norm
-                q_inc = np.array(
-                    [
-                        axis[0] * np.sin(angle / 2),
-                        axis[1] * np.sin(angle / 2),
-                        axis[2] * np.sin(angle / 2),
-                        np.cos(angle / 2),
-                    ]
-                )
-                desired_ee_orn_w = math.quat_multiply(q_inc, ee_orn_w)
-            else:
-                desired_ee_orn_w = ee_orn_w.copy()
-        else:
-            # No velocity command, desired pose is current pose
-            desired_ee_pos_w = ee_pos_w.copy()
-            desired_ee_orn_w = ee_orn_w.copy()
+        # Get desired EE pose directly from planner (already computed in step())
+        # This uses the planner's tracked desired pose, not the actual robot pose
+        desired_ee_pos_w, desired_ee_orn_w = self.ee_planner.get_desired_pose()
 
         # Transform desired end-effector pose to base frame
         desired_ee_pos_b, desired_ee_orn_b = self._world_to_base_frame(
@@ -271,8 +241,6 @@ class BaseRLEnv(gym.Env):
         base_vel = self._convert_policy_to_env_actions(action)
 
         # Get desired end-effector velocity from planner (teleoperator command)
-        current_ee_pos, current_ee_orn = self.sim.robot.link_pose()
-        self.ee_planner.update_current_pose(current_ee_pos, current_ee_orn)
         desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step()
         desired_ee_vel = np.concatenate([desired_ee_lin_vel, desired_ee_ang_vel])  # 6D
 
