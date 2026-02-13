@@ -64,6 +64,12 @@ class BaseRLEnv(gym.Env):
             "use_weighted_regularization", True
         )
 
+        # Planner parameters
+        planner_config = config.get("planner", {})
+        planner_vel_range = planner_config.get("vel_range", [0.2, 0.35])
+        self.planner_vel_range = tuple(planner_vel_range)
+        self.planner_slowdown_distance = planner_config.get("slowdown_distance", 0.1)
+
         # End-effector planner (will be initialized in reset)
         self.ee_planner = None
 
@@ -248,9 +254,10 @@ class BaseRLEnv(gym.Env):
         self.ee_planner = EEPlanner(
             self.goal_pos,
             self.goal_orn,
-            vel_range=(0.3, 0.5),
+            vel_range=self.planner_vel_range,
             dt=self.sim.timestep,
             np_random=self.np_random,
+            slowdown_distance=self.planner_slowdown_distance,
         )
         self.ee_planner.reset(ee_pos, ee_orn)
 

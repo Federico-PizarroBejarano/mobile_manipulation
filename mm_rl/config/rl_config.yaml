@@ -50,11 +50,16 @@ simulation:
 
 # Early termination parameters (N²M² paper: terminate if gripper deviates too much for 20+ steps)
 termination:
-  deviation_pos_threshold: 0.15  # Position deviation threshold in meters
-  deviation_orn_threshold: 0.3  # Orientation deviation threshold (quaternion distance)
-  max_consecutive_deviation_steps: 20  # Max consecutive steps with deviation before termination
+  deviation_pos_threshold: 0.25  # Position deviation threshold in meters (relaxed from 0.15)
+  deviation_orn_threshold: 0.4  # Orientation deviation threshold (relaxed from 0.3)
+  max_consecutive_deviation_steps: 30  # Max consecutive steps with deviation before termination (increased from 20)
 
 # IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
 ik:
-  regularization_strength: 0.1  # Regularization strength (λ) for minimum displacement goal
+  regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
   use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
+
+# Planner parameters
+planner:
+  vel_range: [0.2, 0.35]  # Velocity range (min, max) in m/s for planner (slower than default 0.3-0.5)
+  slowdown_distance: 0.1  # Distance in meters from goal where planner starts slowing down

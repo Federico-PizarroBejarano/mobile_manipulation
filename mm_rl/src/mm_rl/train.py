@@ -68,8 +68,18 @@ def evaluate(env, agent, n_episodes=5):
             episode_length += 1
             done = terminated or truncated
 
-            if terminated:
-                success_count += 1
+        # Check if goal was actually reached (not just early termination)
+        ee_pos, ee_orn = env.sim.robot.link_pose()
+        pos_error = np.linalg.norm(ee_pos - env.goal_pos)
+        q_dot = np.abs(np.dot(ee_orn, env.goal_orn))
+        orn_error = 1.0 - q_dot
+        success = (
+            terminated
+            and pos_error <= env.success_pos_threshold
+            and orn_error <= env.success_orn_threshold
+        )
+        if success:
+            success_count += 1
 
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)

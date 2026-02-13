@@ -16,7 +16,13 @@ class EEPlanner:
     """
 
     def __init__(
-        self, goal_pos, goal_orn, vel_range=(0.3, 0.5), dt=0.03, np_random=None
+        self,
+        goal_pos,
+        goal_orn,
+        vel_range=(0.3, 0.5),
+        dt=0.03,
+        np_random=None,
+        slowdown_distance=0.1,
     ):
         """Initialize end-effector planner.
 
@@ -26,12 +32,14 @@ class EEPlanner:
             vel_range: Tuple (min, max) for random velocity selection (m/s)
             dt: Time step (s)
             np_random: Optional numpy random number generator
+            slowdown_distance: Distance in meters from goal where planner starts slowing down
         """
         self.goal_pos = np.array(goal_pos)
         self.goal_orn = np.array(goal_orn)
         self.vel_range = vel_range
         self.dt = dt
         self.np_random = np_random
+        self.slowdown_distance = slowdown_distance
 
         # Track desired pose (not actual robot pose)
         self.desired_pos = None
@@ -66,9 +74,18 @@ class EEPlanner:
         pos_error_norm = np.linalg.norm(pos_error)
 
         if pos_error_norm > 1e-6:
-            # Move toward goal at fixed velocity
             pos_dir = pos_error / pos_error_norm
-            desired_lin_vel = pos_dir * min(pos_error_norm / 2.0, self.planner_vel)
+            # Maintain full velocity until within slowdown_distance, then slow down
+            if pos_error_norm > self.slowdown_distance:
+                # Use full planner velocity when far from goal
+                desired_lin_vel = pos_dir * self.planner_vel
+            else:
+                # Slow down proportionally when close to goal
+                desired_lin_vel = (
+                    pos_dir
+                    * (pos_error_norm / self.slowdown_distance)
+                    * self.planner_vel
+                )
         else:
             # Reached goal position
             desired_lin_vel = np.zeros(3)
