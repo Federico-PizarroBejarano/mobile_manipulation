@@ -21,10 +21,9 @@ rl:
 # Goal generation parameters
 goal:
   pos_range:  # Goal position range [min, max] for [x, y, z] in meters
-    - [-1.0, -1.0, 0.3]
-    - [1.0, 1.0, 1.0]
-  orn_range: 0.1  # Orientation range in radians
-  success_pos_threshold: 0.05  # Position success threshold in meters
+    - [-2.0, -2.0, 0.4]
+    - [2.0, 2.0, 1.4]
+  success_pos_threshold: 0.1  # Position success threshold in meters
   success_orn_threshold: 0.1  # Orientation success threshold (quaternion distance)
   intermediate_goal_distance: 1.5  # N²M² paper: intermediate goal ~1.5m ahead instead of final goal
   use_intermediate_goal: true  # Use intermediate goal in observation instead of final goal

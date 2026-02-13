@@ -70,13 +70,11 @@ class SimpleGoalEnv(BaseRLEnv):
         self.goal_pos = self.np_random.uniform(pos_min, pos_max)
 
         # Generate random quaternion using axis-angle representation
-        max_angle = float(self.goal_orn_range)
-
         # Random axis (uniform on unit sphere)
         axis = self.np_random.uniform(-1, 1, size=3)
         axis = axis / (np.linalg.norm(axis) + 1e-8)
         # Random angle within range
-        angle = self.np_random.uniform(0, max_angle)
+        angle = self.np_random.uniform(-np.pi, np.pi)
         # Convert to quaternion (xyzs order)
         self.goal_orn = np.array(
             [
