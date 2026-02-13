@@ -99,7 +99,7 @@ class SAC:
             action = torch.tanh(mean)
         else:
             action, _, _ = self.actor.sample(state)
-        action = action.detach().numpy()[0]
+        action = action.detach().cpu().numpy()[0]
         # Scale action to action range
         action = self._scale_action(action)
         return action

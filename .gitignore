@@ -20,6 +20,10 @@ __pycache__/
 # Results/output data
 results/
 
-# Ignore Python egg files
+# Python Egg
 *.egg
 *.egg-info/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
