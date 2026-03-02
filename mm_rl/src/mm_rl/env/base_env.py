@@ -90,13 +90,6 @@ class BaseRLEnv(gym.Env):
         self.goal_pos = None
         self.goal_orn = None
 
-        # Intermediate goal parameters (N²M² paper: observe intermediate goal ~1.5m ahead)
-        goal_config = config.get("goal", {})
-        self.use_intermediate_goal = goal_config.get("use_intermediate_goal", True)
-        self.intermediate_goal_distance = goal_config.get(
-            "intermediate_goal_distance", 1.5
-        )
-
         # Early termination tracking (N²M² paper: terminate if deviates too much for 20+ steps)
         termination_config = config.get("termination", {})
         self.deviation_pos_threshold = termination_config.get(
@@ -160,22 +153,10 @@ class BaseRLEnv(gym.Env):
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # N²M² paper: use intermediate goal ~1.5m ahead instead of final goal
-        # "we do not let the agent observe the final end-effector goal which can often
-        # be far away, but we repeatedly apply the end-effector motion generator fee
-        # to generate an intermediate goal roughly 1.5 m ahead of the agent."
-        if self.use_intermediate_goal and self.ee_planner is not None:
-            intermediate_goal_pos_w, intermediate_goal_orn_w = (
-                self.ee_planner.get_intermediate_goal(self.intermediate_goal_distance)
-            )
-            goal_pos_b, goal_orn_b = self._world_to_base_frame(
-                intermediate_goal_pos_w, intermediate_goal_orn_w, base_pos_w, base_orn_w
-            )
-        else:
-            # Use final goal (original behavior)
-            goal_pos_b, goal_orn_b = self._world_to_base_frame(
-                self.goal_pos, self.goal_orn, base_pos_w, base_orn_w
-            )
+        # Use final goal (original behavior)
+        goal_pos_b, goal_orn_b = self._world_to_base_frame(
+            self.goal_pos, self.goal_orn, base_pos_w, base_orn_w
+        )
 
         # Get EE velocities (v_{ee}) from planner command (teleoperator), not actual robot velocity
         # Transform commanded velocity to base frame

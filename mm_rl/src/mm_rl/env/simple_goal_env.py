@@ -74,7 +74,7 @@ class SimpleGoalEnv(BaseRLEnv):
         axis = self.np_random.uniform(-1, 1, size=3)
         axis = axis / (np.linalg.norm(axis) + 1e-8)
         # Random angle within range
-        angle = self.np_random.uniform(-np.pi, np.pi)
+        angle = self.np_random.uniform(0, self.goal_orn_range)
         # Convert to quaternion (xyzs order)
         self.goal_orn = np.array(
             [

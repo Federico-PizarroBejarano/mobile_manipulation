@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Evaluate a trained model with visualization.
 
 Command:

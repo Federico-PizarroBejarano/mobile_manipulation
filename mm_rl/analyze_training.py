@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Analyze training metrics from training_metrics.npz file.
 
 Command:
