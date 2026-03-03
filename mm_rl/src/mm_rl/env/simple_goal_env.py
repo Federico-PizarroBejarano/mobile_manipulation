@@ -33,6 +33,9 @@ class SimpleGoalEnv(BaseRLEnv):
         self.acceleration_penalty_multiplier = self.reward_config.get(
             "acceleration_penalty_multiplier"
         )
+        self.base_action_penalty_multiplier = self.reward_config.get(
+            "base_action_penalty_multiplier", 0.0
+        )
 
         # Initialize goal
         self.goal_pos = None
@@ -113,7 +116,7 @@ class SimpleGoalEnv(BaseRLEnv):
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Compute reward: r = λ_ik * r_ik + λ_acc * r_acc
+        # Compute reward: r = λ_ik * r_ik + λ_acc * r_acc + λ_base * (-||action||^2)
         reward = compute_total_reward(
             ee_pos_b,
             ee_orn_b,
@@ -124,6 +127,7 @@ class SimpleGoalEnv(BaseRLEnv):
             rot_weight=self.rot_weight,
             ik_penalty_multiplier=self.ik_penalty_multiplier,
             acceleration_penalty_multiplier=self.acceleration_penalty_multiplier,
+            base_action_penalty_multiplier=self.base_action_penalty_multiplier,
         )
 
         return reward

@@ -32,6 +32,7 @@ reward:
   rot_weight: 0.5  # Weight for orientation error relative to position error in IK reward
   ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik in paper)
   acceleration_penalty_multiplier: 0.01  # Multiplier for acceleration penalty (λ_acc in paper)
+  base_action_penalty_multiplier: 0.01  # Penalty on ||action||^2 to discourage aggressive base commands
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:

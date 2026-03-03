@@ -68,6 +68,7 @@ def compute_total_reward(
     rot_weight=0.5,
     ik_penalty_multiplier=1.0,
     acceleration_penalty_multiplier=0.01,
+    base_action_penalty_multiplier=0.0,
 ):
     """Compute total reward for a step.
 
@@ -84,6 +85,7 @@ def compute_total_reward(
         rot_weight: Weight for orientation error relative to position error in IK reward
         ik_penalty_multiplier: Multiplier for IK reward (λ_ik in paper)
         acceleration_penalty_multiplier: Multiplier for acceleration penalty (λ_acc in paper)
+        base_action_penalty_multiplier: Multiplier for base action penalty (λ_base in paper)
 
     Returns:
         float: Total reward
@@ -103,4 +105,6 @@ def compute_total_reward(
         action, prev_action, acceleration_penalty_multiplier
     )
 
-    return ik_reward_val + acceleration_penalty_val
+    base_action_penalty_val = base_action_penalty_multiplier * np.sum(np.square(action))
+
+    return ik_reward_val + acceleration_penalty_val + base_action_penalty_val
