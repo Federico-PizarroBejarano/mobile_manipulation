@@ -72,7 +72,7 @@ def evaluate(env, agent, n_episodes=5):
         ee_pos, ee_orn = env.sim.robot.link_pose()
         pos_error = np.linalg.norm(ee_pos - env.goal_pos)
         q_dot = np.abs(np.dot(ee_orn, env.goal_orn))
-        orn_error = 1.0 - q_dot
+        orn_error = 1.0 - q_dot**2
         success = (
             terminated
             and pos_error <= env.success_pos_threshold
@@ -137,7 +137,8 @@ def train():
         tau=sac_config.get("tau"),
         alpha=sac_config.get("alpha"),
         auto_alpha=sac_config.get("auto_alpha"),
-        hidden_dim=sac_config.get("hidden_dim"),
+        hidden_layers=sac_config["hidden_layers"],
+        buffer_size=sac_config.get("buffer_size", 100000),
         device=args.device,
         infinite_horizon=sac_config.get("infinite_horizon", False),
     )

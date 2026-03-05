@@ -8,16 +8,20 @@ import torch.nn.functional as F
 class Actor(nn.Module):
     """Actor network for SAC that outputs mean and log_std for actions."""
 
-    def __init__(self, state_dim, action_dim, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, hidden_layers):
         super().__init__()
-        self.fc1 = nn.Linear(state_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc_mean = nn.Linear(hidden_dim, action_dim)
-        self.fc_logstd = nn.Linear(hidden_dim, action_dim)
+        layers = list(hidden_layers)
+        dims = [state_dim] + layers
+        self.fcs = nn.ModuleList(
+            [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
+        )
+        self.fc_mean = nn.Linear(dims[-1], action_dim)
+        self.fc_logstd = nn.Linear(dims[-1], action_dim)
 
     def forward(self, state):
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
+        x = state
+        for fc in self.fcs:
+            x = F.relu(fc(x))
         mean = self.fc_mean(x)
         log_std = self.fc_logstd(x)
         log_std = torch.clamp(log_std, min=-20, max=2)
@@ -39,27 +43,30 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     """Critic network (Q-function) for SAC."""
 
-    def __init__(self, state_dim, action_dim, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, hidden_layers):
         super().__init__()
-        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, 1)
+        layers = list(hidden_layers)
+        dims = [state_dim + action_dim] + layers
+        self.fcs = nn.ModuleList(
+            [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
+        )
+        self.fc_out = nn.Linear(dims[-1], 1)
 
     def forward(self, state, action):
         x = torch.cat([state, action], dim=1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        q = self.fc3(x)
+        for fc in self.fcs:
+            x = F.relu(fc(x))
+        q = self.fc_out(x)
         return q
 
 
 class DoubleCritic(nn.Module):
     """Double Q-network to reduce overestimation bias."""
 
-    def __init__(self, state_dim, action_dim, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, hidden_layers):
         super().__init__()
-        self.q1 = Critic(state_dim, action_dim, hidden_dim)
-        self.q2 = Critic(state_dim, action_dim, hidden_dim)
+        self.q1 = Critic(state_dim, action_dim, hidden_layers)
+        self.q2 = Critic(state_dim, action_dim, hidden_layers)
 
     def forward(self, state, action):
         q1 = self.q1(state, action)

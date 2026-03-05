@@ -108,22 +108,22 @@ class BaseRLEnv(gym.Env):
 
         Observation structure per paper: [v_{ee}, ee, \hat{ee}, g, s_{robot}, a_{t-1}]
         - v_{ee}: EE velocities (6D: 3D linear + 3D angular)
-        - ee: current EE pose (7D: 3D position + 4D quaternion)
-        - \hat{ee}: desired EE pose (7D: 3D position + 4D quaternion)
-        - g: goal pose (7D: 3D position + 4D quaternion)
+        - ee: current EE pose (12D: 3D position + 9D rotation matrix)
+        - \hat{ee}: desired EE pose (12D: 3D position + 9D rotation matrix)
+        - g: goal pose (12D: 3D position + 9D rotation matrix)
         - s_{robot}: joint positions (nq)
         - a_{t-1}: previous action (action_dim)
         """
-        return 6 + 7 + 7 + 7 + self.nq + self.action_space.shape[0]
+        return 6 + 12 + 12 + 12 + self.nq + self.action_space.shape[0]
 
     def _get_observation(self):
         """Get current observation matching paper structure.
 
         Observation: [v_{ee}, ee, \hat{ee}, g, s_{robot}, a_{t-1}]
         - v_{ee}: EE velocities from planner (6D: linear + angular in base frame)
-        - ee: current EE pose (7D: position + quaternion in base frame)
-        - \hat{ee}: desired EE pose from planner (7D: position + quaternion in base frame)
-        - g: goal pose (7D: position + quaternion in base frame)
+        - ee: current EE pose (12D: position + rotation matrix in base frame)
+        - \hat{ee}: desired EE pose from planner (12D: position + rotation matrix in base frame)
+        - g: goal pose (12D: position + rotation matrix in base frame)
         - s_{robot}: joint positions (nq)
         - a_{t-1}: previous action (action_dim)
 
@@ -175,11 +175,15 @@ class BaseRLEnv(gym.Env):
             [
                 ee_velocities,  # v_{ee}: EE velocities (6D)
                 ee_pos_b,  # ee: current EE position (3D)
-                ee_orn_b,  # ee: current EE orientation (4D quaternion)
+                math.quat_to_rot(
+                    ee_orn_b
+                ).flatten(),  # ee: current EE rotation matrix (9D)
                 desired_ee_pos_b,  # \hat{ee}: desired EE position (3D)
-                desired_ee_orn_b,  # \hat{ee}: desired EE orientation (4D quaternion)
+                math.quat_to_rot(
+                    desired_ee_orn_b
+                ).flatten(),  # \hat{ee}: desired EE rotation matrix (9D)
                 goal_pos_b,  # g: goal position (3D)
-                goal_orn_b,  # g: goal orientation (4D quaternion)
+                math.quat_to_rot(goal_orn_b).flatten(),  # g: goal rotation matrix (9D)
                 q,  # s_{robot}: joint positions (nq)
                 self.prev_action,  # a_{t-1}: previous action (action_dim)
             ]
@@ -303,7 +307,7 @@ class BaseRLEnv(gym.Env):
 
         # Compute orientation deviation (quaternion distance)
         q_dot = np.abs(np.dot(ee_orn_w, desired_ee_orn_w))
-        orn_deviation = 1.0 - q_dot
+        orn_deviation = 1.0 - q_dot**2
 
         # Check if deviation exceeds thresholds
         if (

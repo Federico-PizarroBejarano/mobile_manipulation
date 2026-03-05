@@ -1,7 +1,7 @@
-# RL Training Configuration
+# RL Training Configuration (N²M² paper-aligned where noted)
 
 rl:
-  max_steps: 1000000  # Total training steps
+  max_steps: 500000  # Total training steps (paper: 10e6)
   start_steps: 10000  # Random actions before training starts
   update_after: 1000  # Start updating networks after N steps
   update_freq: 1  # Update networks every N steps
@@ -9,13 +9,14 @@ rl:
   save_freq: 50000  # Frequency of checkpoint saving
 
   sac:
-    lr: 3.0e-4  # Learning rate
-    gamma: 0.99  # Discount factor
-    tau: 0.005  # Soft update coefficient for target networks
+    lr: 1.0e-4  # Learning rate (paper: 1e-4)
+    gamma: 0.99  # Discount factor (paper: 0.99)
+    tau: 0.001  # Soft update coefficient for target networks (paper: 1e-3)
     alpha: 0.2  # Initial entropy coefficient (if not auto-tuning)
     auto_alpha: true  # Automatically tune entropy coefficient
-    batch_size: 256  # Batch size for training
-    hidden_dim: 256  # Hidden layer dimension for networks
+    batch_size: 256  # Batch size for training (paper: 256)
+    hidden_layers: [512, 512, 256]  # Units per layer (paper: [512, 512, 256])
+    buffer_size: 100000  # Replay buffer capacity (paper: 10e5)
     infinite_horizon: true  # N²M² paper: infinite horizon with bootstrapping at episode end
 
 # Goal generation parameters
@@ -25,14 +26,14 @@ goal:
     - [2.0, 2.0, 1.4]
   orn_range: 0  # Goal orientation range in radians
   success_pos_threshold: 0.1  # Position success threshold in meters
-  success_orn_threshold: 0.1  # Orientation success threshold (quaternion distance)
+  success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
 
 # Reward parameters
 reward:
-  rot_weight: 0.5  # Weight for orientation error relative to position error in IK reward
-  ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik in paper)
-  acceleration_penalty_multiplier: 0.01  # Multiplier for acceleration penalty (λ_acc in paper)
-  base_action_penalty_multiplier: 0.01  # Penalty on ||action||^2 to discourage aggressive base commands
+  rot_weight: 2.0  # Weight for orientation error relative to position error in IK reward
+  ik_penalty_multiplier: 50.0  # Multiplier for IK reward (λ_ik in paper)
+  acceleration_penalty_multiplier: 0.05  # Multiplier for acceleration penalty (λ_acc in paper)
+  base_action_penalty_multiplier: 0.05   # Penalty on ||action||^2 to discourage aggressive base commands
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -50,9 +51,9 @@ simulation:
 
 # Early termination parameters (N²M² paper: terminate if gripper deviates too much for 20+ steps)
 termination:
-  deviation_pos_threshold: 0.25  # Position deviation threshold in meters (relaxed from 0.15)
-  deviation_orn_threshold: 0.4  # Orientation deviation threshold (relaxed from 0.3)
-  max_consecutive_deviation_steps: 30  # Max consecutive steps with deviation before termination (increased from 20)
+  deviation_pos_threshold: 0.1   # Position deviation threshold in meters
+  deviation_orn_threshold: 0.05  # Orientation deviation threshold
+  max_consecutive_deviation_steps: 20  # Max consecutive steps with deviation before termination
 
 # IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
 ik:

@@ -19,6 +19,8 @@ __pycache__/
 
 # Results/output data
 results/
+checkpoints/
+logs/
 
 # Python Egg
 *.egg

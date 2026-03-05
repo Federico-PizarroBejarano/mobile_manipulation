@@ -43,13 +43,14 @@ class SAC:
         self,
         state_dim,
         action_dim,
+        hidden_layers,
         action_range=(-1.0, 1.0),
         lr=3e-4,
         gamma=0.99,
         tau=0.005,
         alpha=0.2,
         auto_alpha=True,
-        hidden_dim=256,
+        buffer_size=100000,
         device="cpu",
         infinite_horizon=False,
     ):
@@ -62,9 +63,11 @@ class SAC:
         self.infinite_horizon = infinite_horizon
 
         # Networks
-        self.actor = Actor(state_dim, action_dim, hidden_dim).to(device)
-        self.critic = DoubleCritic(state_dim, action_dim, hidden_dim).to(device)
-        self.critic_target = DoubleCritic(state_dim, action_dim, hidden_dim).to(device)
+        self.actor = Actor(state_dim, action_dim, hidden_layers).to(device)
+        self.critic = DoubleCritic(state_dim, action_dim, hidden_layers).to(device)
+        self.critic_target = DoubleCritic(state_dim, action_dim, hidden_layers).to(
+            device
+        )
 
         # Initialize target network
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -82,8 +85,8 @@ class SAC:
         else:
             self.alpha = alpha
 
-        # Replay buffer
-        self.replay_buffer = ReplayBuffer()
+        # Replay buffer (paper: 10e5)
+        self.replay_buffer = ReplayBuffer(capacity=buffer_size)
 
     @property
     def alpha_value(self):

@@ -280,7 +280,7 @@ def test_ee_planner_with_mpsf(
 
             pos_error = np.linalg.norm(actual_ee_pos - desired_ee_pos)
             q_dot = np.abs(np.dot(actual_ee_orn, desired_ee_orn))
-            orn_error = 1.0 - q_dot
+            orn_error = 1.0 - q_dot**2
 
             # Track errors
             episode_tracking_errors_pos.append(pos_error)

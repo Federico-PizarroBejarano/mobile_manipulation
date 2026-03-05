@@ -156,7 +156,7 @@ class SimpleGoalEnv(BaseRLEnv):
 
         # Check orientation distance
         q_dot = np.abs(np.dot(ee_orn_w, self.goal_orn))
-        orn_error = 1.0 - q_dot
+        orn_error = 1.0 - q_dot**2
         if orn_error > self.success_orn_threshold:
             return False
 

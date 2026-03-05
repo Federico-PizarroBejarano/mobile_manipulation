@@ -92,7 +92,7 @@ class EEPlanner:
 
         # Compute desired angular velocity toward goal orientation
         q_dot = np.abs(np.dot(self.desired_orn, self.goal_orn))
-        orn_error = 1.0 - q_dot
+        orn_error = 1.0 - q_dot**2
 
         if orn_error > 1e-6:
             # Compute quaternion difference

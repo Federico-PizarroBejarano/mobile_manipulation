@@ -32,7 +32,7 @@ def compute_ik_reward(
 
     # Orientation distance (quaternion distance)
     q_dot = np.abs(np.dot(achieved_ee_orn, desired_ee_orn))
-    rot_dist = 1.0 - q_dot
+    rot_dist = 1.0 - q_dot**2
 
     ik_reward = -ik_penalty_multiplier * (pos_dist**2 + rot_weight * rot_dist)
     return ik_reward
@@ -105,6 +105,8 @@ def compute_total_reward(
         action, prev_action, acceleration_penalty_multiplier
     )
 
-    base_action_penalty_val = base_action_penalty_multiplier * np.sum(np.square(action))
+    base_action_penalty_val = -base_action_penalty_multiplier * np.sum(
+        np.square(action)
+    )
 
     return ik_reward_val + acceleration_penalty_val + base_action_penalty_val
