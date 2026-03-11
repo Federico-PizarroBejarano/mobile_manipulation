@@ -7,6 +7,20 @@ from spatialmath.base import q2r, qunit, r2q
 QUAT_ORDER = "xyzs"
 
 
+def quat_orientation_error(q_achieved, q_desired):
+    """Orientation error between two unit quaternions.
+
+    Args:
+        q_achieved (ndarray): Achieved orientation quaternion, shape (4,).
+        q_desired (ndarray): Desired orientation quaternion, shape (4,).
+
+    Returns:
+        float: Orientation error.
+    """
+    q_dot = np.abs(np.dot(np.asarray(q_achieved), np.asarray(q_desired)))
+    return 1.0 - q_dot**2
+
+
 def quat_to_rot(q):
     """Convert quaternion to rotation matrix.
 

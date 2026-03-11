@@ -15,6 +15,7 @@ import numpy as np
 
 from mm_rl.env.simple_goal_env import SimpleGoalEnv
 from mm_rl.sac.sac import SAC
+from mm_utils import math as mm_math
 from mm_utils import parsing
 
 
@@ -131,8 +132,7 @@ def evaluate_episode(env, agent, episode_num, save_trajectory=False):
         if episode_length % 100 == 0:
             ee_pos, ee_orn = env.sim.robot.link_pose()
             pos_error = np.linalg.norm(ee_pos - env.goal_pos)
-            q_dot = np.abs(np.dot(ee_orn, env.goal_orn))
-            orn_error = 1.0 - q_dot**2
+            orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
             print(
                 f"  Step {episode_length}: Reward={reward:.3f}, "
                 f"Pos error={pos_error:.3f}, Orn error={orn_error:.3f}"
@@ -143,8 +143,7 @@ def evaluate_episode(env, agent, episode_num, save_trajectory=False):
     # Final state
     ee_pos, ee_orn = env.sim.robot.link_pose()
     pos_error = np.linalg.norm(ee_pos - env.goal_pos)
-    q_dot = np.abs(np.dot(ee_orn, env.goal_orn))
-    orn_error = 1.0 - q_dot**2
+    orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
     # Check if goal was actually reached (not just early termination)
     success = (
         terminated

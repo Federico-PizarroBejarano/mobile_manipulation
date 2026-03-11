@@ -21,6 +21,7 @@ import numpy as np
 import mm_control.MPC as MPC
 from mm_rl.env.ee_planner import EEPlanner
 from mm_simulator import simulation
+from mm_utils import math as mm_math
 from mm_utils import parsing
 from mm_utils.parsing import recursive_dict_update
 
@@ -279,8 +280,7 @@ def test_ee_planner_with_mpsf(
             desired_ee_pos, desired_ee_orn = ee_planner.get_desired_pose()
 
             pos_error = np.linalg.norm(actual_ee_pos - desired_ee_pos)
-            q_dot = np.abs(np.dot(actual_ee_orn, desired_ee_orn))
-            orn_error = 1.0 - q_dot**2
+            orn_error = mm_math.quat_orientation_error(actual_ee_orn, desired_ee_orn)
 
             # Track errors
             episode_tracking_errors_pos.append(pos_error)
@@ -294,8 +294,7 @@ def test_ee_planner_with_mpsf(
 
             # Check if goal reached
             goal_pos_error = np.linalg.norm(actual_ee_pos - goal_pos)
-            goal_q_dot = np.abs(np.dot(actual_ee_orn, goal_orn))
-            goal_orn_error = 1.0 - goal_q_dot
+            goal_orn_error = mm_math.quat_orientation_error(actual_ee_orn, goal_orn)
 
             if (
                 goal_pos_error <= success_pos_threshold
@@ -340,8 +339,7 @@ def test_ee_planner_with_mpsf(
         # Final goal error
         final_ee_pos, final_ee_orn = robot.link_pose()
         final_pos_error = np.linalg.norm(final_ee_pos - goal_pos)
-        final_q_dot = np.abs(np.dot(final_ee_orn, goal_orn))
-        final_orn_error = 1.0 - final_q_dot
+        final_orn_error = mm_math.quat_orientation_error(final_ee_orn, goal_orn)
         goal_reached = (
             final_pos_error <= success_pos_threshold
             and final_orn_error <= success_orn_threshold
