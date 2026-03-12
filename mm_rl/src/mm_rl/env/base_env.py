@@ -8,7 +8,7 @@ from gymnasium import spaces
 
 from mm_rl.env.ee_planner import EEPlanner
 from mm_simulator.simulation import BulletSimulation
-from mm_utils import math
+from mm_utils import math as mm_math
 
 
 class BaseRLEnv(gym.Env):
@@ -160,11 +160,11 @@ class BaseRLEnv(gym.Env):
 
         # Get EE velocities (v_{ee}) from planner command (teleoperator), not actual robot velocity
         # Transform commanded velocity to base frame
-        ee_lin_vel_b = math.quat_rotate(
-            math.quat_inverse(base_orn_w), self.desired_ee_vel[:3]
+        ee_lin_vel_b = mm_math.quat_rotate(
+            mm_math.quat_inverse(base_orn_w), self.desired_ee_vel[:3]
         )
-        ee_ang_vel_b = math.quat_rotate(
-            math.quat_inverse(base_orn_w), self.desired_ee_vel[3:]
+        ee_ang_vel_b = mm_math.quat_rotate(
+            mm_math.quat_inverse(base_orn_w), self.desired_ee_vel[3:]
         )
         ee_velocities = np.concatenate(
             [ee_lin_vel_b, ee_ang_vel_b]
@@ -175,15 +175,17 @@ class BaseRLEnv(gym.Env):
             [
                 ee_velocities,  # v_{ee}: EE velocities (6D)
                 ee_pos_b,  # ee: current EE position (3D)
-                math.quat_to_rot(
+                mm_math.quat_to_rot(
                     ee_orn_b
                 ).flatten(),  # ee: current EE rotation matrix (9D)
                 desired_ee_pos_b,  # \hat{ee}: desired EE position (3D)
-                math.quat_to_rot(
+                mm_math.quat_to_rot(
                     desired_ee_orn_b
                 ).flatten(),  # \hat{ee}: desired EE rotation matrix (9D)
                 goal_pos_b,  # g: goal position (3D)
-                math.quat_to_rot(goal_orn_b).flatten(),  # g: goal rotation matrix (9D)
+                mm_math.quat_to_rot(
+                    goal_orn_b
+                ).flatten(),  # g: goal rotation matrix (9D)
                 q,  # s_{robot}: joint positions (nq)
                 self.prev_action,  # a_{t-1}: previous action (action_dim)
             ]
@@ -205,11 +207,11 @@ class BaseRLEnv(gym.Env):
         """
         # Position: transform to base frame
         pos_rel = pos_w - base_pos_w
-        q_base_inv = math.quat_inverse(base_orn_w)
-        pos_b = math.quat_rotate(q_base_inv, pos_rel)
+        q_base_inv = mm_math.quat_inverse(base_orn_w)
+        pos_b = mm_math.quat_rotate(q_base_inv, pos_rel)
 
         # Orientation: relative rotation
-        orn_b = math.quat_multiply(q_base_inv, orn_w)
+        orn_b = mm_math.quat_multiply(q_base_inv, orn_w)
 
         return pos_b, orn_b
 
@@ -306,8 +308,7 @@ class BaseRLEnv(gym.Env):
         pos_deviation = np.linalg.norm(ee_pos_w - desired_ee_pos_w)
 
         # Compute orientation deviation (quaternion distance)
-        q_dot = np.abs(np.dot(ee_orn_w, desired_ee_orn_w))
-        orn_deviation = 1.0 - q_dot**2
+        orn_deviation = mm_math.quat_orientation_error(ee_orn_w, desired_ee_orn_w)
 
         # Check if deviation exceeds thresholds
         if (

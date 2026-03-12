@@ -4,6 +4,7 @@ import numpy as np
 
 from mm_rl.env.base_env import BaseRLEnv
 from mm_rl.env.reward import compute_total_reward
+from mm_utils import math as mm_math
 
 
 class SimpleGoalEnv(BaseRLEnv):
@@ -155,8 +156,7 @@ class SimpleGoalEnv(BaseRLEnv):
             return False
 
         # Check orientation distance
-        q_dot = np.abs(np.dot(ee_orn_w, self.goal_orn))
-        orn_error = 1.0 - q_dot**2
+        orn_error = mm_math.quat_orientation_error(ee_orn_w, self.goal_orn)
         if orn_error > self.success_orn_threshold:
             return False
 

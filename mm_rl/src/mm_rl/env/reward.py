@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from mm_utils import math as mm_math
+
 
 def compute_ik_reward(
     achieved_ee_pos,
@@ -31,8 +33,7 @@ def compute_ik_reward(
     pos_dist = np.linalg.norm(achieved_ee_pos - desired_ee_pos)
 
     # Orientation distance (quaternion distance)
-    q_dot = np.abs(np.dot(achieved_ee_orn, desired_ee_orn))
-    rot_dist = 1.0 - q_dot**2
+    rot_dist = mm_math.quat_orientation_error(achieved_ee_orn, desired_ee_orn)
 
     ik_reward = -ik_penalty_multiplier * (pos_dist**2 + rot_weight * rot_dist)
     return ik_reward

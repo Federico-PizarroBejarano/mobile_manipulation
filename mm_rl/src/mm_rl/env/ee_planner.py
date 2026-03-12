@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from mm_utils import math
+from mm_utils import math as mm_math
 
 
 class EEPlanner:
@@ -91,13 +91,12 @@ class EEPlanner:
             desired_lin_vel = np.zeros(3)
 
         # Compute desired angular velocity toward goal orientation
-        q_dot = np.abs(np.dot(self.desired_orn, self.goal_orn))
-        orn_error = 1.0 - q_dot**2
+        orn_error = mm_math.quat_orientation_error(self.desired_orn, self.goal_orn)
 
         if orn_error > 1e-6:
             # Compute quaternion difference
-            q_inv = math.quat_inverse(self.desired_orn)
-            q_diff = math.quat_multiply(self.goal_orn, q_inv)
+            q_inv = mm_math.quat_inverse(self.desired_orn)
+            q_diff = mm_math.quat_multiply(self.goal_orn, q_inv)
 
             # Convert to axis-angle for angular velocity
             q_diff_norm = np.linalg.norm(q_diff[:3])
@@ -130,8 +129,7 @@ class EEPlanner:
             ang_vel_quat[3] = 1.0
             # Normalize the delta quaternion
             ang_vel_quat = ang_vel_quat / np.linalg.norm(ang_vel_quat)
-            # quat_multiply normalizes by default
-            self.desired_orn = math.quat_multiply(self.desired_orn, ang_vel_quat)
+            self.desired_orn = mm_math.quat_multiply(self.desired_orn, ang_vel_quat)
 
         return desired_lin_vel, desired_ang_vel
 
