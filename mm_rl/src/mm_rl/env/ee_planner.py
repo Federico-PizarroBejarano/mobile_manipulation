@@ -61,13 +61,19 @@ class EEPlanner:
         # Set random fixed velocity for this episode
         self.planner_vel = self.np_random.uniform(self.vel_range[0], self.vel_range[1])
 
-    def step(self):
+    def step(self, scale=1.0):
         """Step planner forward using fixed velocity set on reset.
 
-        Returns desired end-effector velocity command (teleoperator command).
+        The scale parameter is intended for the *commanded* EE velocity only.
+        The internal desired pose is always advanced using the unscaled
+        velocity defined by the motion generator. This means the reference
+        trajectory (desired pose over time) is independent of the agent's
+        current speed choice and corresponds to the "default" motion.
 
         Returns:
             tuple: (desired_lin_vel, desired_ang_vel) in world frame (3,), (3,)
+                   These are unscaled; the caller applies `scale` when sending
+                   commands to the robot/IK.
         """
         # Compute desired linear velocity toward goal from last desired pose
         pos_error = self.goal_pos - self.desired_pos
@@ -117,21 +123,47 @@ class EEPlanner:
             # Reached goal orientation
             desired_ang_vel = np.zeros(3)
 
-        # Update desired pose based on computed velocities
-        self.desired_pos = self.desired_pos + desired_lin_vel * self.dt
-
-        # Update desired orientation using quaternion integration
-        if np.linalg.norm(desired_ang_vel) > 1e-6:
-            # Quaternion derivative: q_dot = 0.5 * q * [0, wx, wy, wz]
-            # For small rotations: q_new ≈ q * [1, 0.5*dt*wx, 0.5*dt*wy, 0.5*dt*wz]
-            ang_vel_quat = np.zeros(4)
-            ang_vel_quat[:3] = desired_ang_vel * self.dt / 2.0
-            ang_vel_quat[3] = 1.0
-            # Normalize the delta quaternion
-            ang_vel_quat = ang_vel_quat / np.linalg.norm(ang_vel_quat)
-            self.desired_orn = mm_math.quat_multiply(self.desired_orn, ang_vel_quat)
+        # Update desired pose based on unscaled velocities (reference trajectory)
+        self.desired_pos, self.desired_orn = self.integrate_pose(
+            self.desired_pos,
+            self.desired_orn,
+            desired_lin_vel,
+            desired_ang_vel,
+            self.dt,
+            scale=1.0,
+        )
 
         return desired_lin_vel, desired_ang_vel
+
+    @staticmethod
+    def integrate_pose(pos, orn, lin_vel, ang_vel, dt, scale=1.0):
+        """Integrate pose by one step given velocities.
+
+        Args:
+            pos: Position (3,) in world frame.
+            orn: Orientation quaternion (4,) in world frame.
+            lin_vel: Linear velocity (3,) in world frame.
+            ang_vel: Angular velocity (3,) in world frame (rad/s).
+            dt: Time step (s).
+            scale: Scale applied to both velocities (e.g. ee_vel_scale). Use 1.0 for unscaled.
+
+        Returns:
+            tuple: (new_pos, new_orn) after integration.
+        """
+        pos = np.asarray(pos)
+        orn = np.asarray(orn)
+        scaled_lin = np.asarray(lin_vel) * scale
+        scaled_ang = np.asarray(ang_vel) * scale
+        new_pos = pos + scaled_lin * dt
+        if np.linalg.norm(scaled_ang) > 1e-6:
+            ang_vel_quat = np.zeros(4)
+            ang_vel_quat[:3] = scaled_ang * dt / 2.0
+            ang_vel_quat[3] = 1.0
+            ang_vel_quat = ang_vel_quat / np.linalg.norm(ang_vel_quat)
+            new_orn = mm_math.quat_multiply(orn, ang_vel_quat)
+        else:
+            new_orn = orn.copy()
+        return new_pos, new_orn
 
     def get_desired_pose(self):
         """Get current desired pose from planner.

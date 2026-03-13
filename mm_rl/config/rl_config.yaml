@@ -28,12 +28,13 @@ goal:
   success_pos_threshold: 0.1  # Position success threshold in meters
   success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
 
-# Reward parameters
+# Reward parameters (N²M² Eq. 8: r = n_vel*(λ_ik r_ik + r_coll) + λ_vel r_vel + λ_acc r_acc)
 reward:
   rot_weight: 2.0  # Weight for orientation error relative to position error in IK reward
   ik_penalty_multiplier: 50.0  # Multiplier for IK reward (λ_ik in paper)
   acceleration_penalty_multiplier: 0.05  # Multiplier for acceleration penalty (λ_acc in paper)
   base_action_penalty_multiplier: 0.05   # Penalty on ||action||^2 to discourage aggressive base commands
+  vel_reward_multiplier: 0.1  # λ_vel in paper (Table II). r_vel = -(v_ee_max - n_ee)^2 encourages using speed.
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -64,3 +65,5 @@ ik:
 planner:
   vel_range: [0.2, 0.35]  # Velocity range (min, max) in m/s for planner (slower than default 0.3-0.5)
   slowdown_distance: 0.1  # Distance in meters from goal where planner starts slowing down
+  # EE velocity scale: policy action in [-1, 1] maps to [min, max]. N²M²: agent controls norm of EE motion.
+  ee_vel_scale_range: [0.001, 1.5]  # 0 = full stop, 1 = full planner speed

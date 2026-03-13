@@ -63,7 +63,7 @@ controller:
       v: 9  # generalized velocity
       x: 18 # state
       u: 9  # input
-    x0: [ 1, -1, 0, 0.5pi, -0.25pi, 0.5pi, -0.25pi, 0.5pi, 0.417pi ]
+    x0: [1.5, 2, -0.3, 0.2pi, -0.25pi, 0.5pi, -0.25pi, 0.6pi, 0.417pi]
 
     limits:
       input:

@@ -37,6 +37,9 @@ class SimpleGoalEnv(BaseRLEnv):
         self.base_action_penalty_multiplier = self.reward_config.get(
             "base_action_penalty_multiplier", 0.0
         )
+        self.vel_reward_multiplier = self.reward_config.get(
+            "vel_reward_multiplier", 0.1
+        )  # λ_vel in paper (Table II: 0.1)
 
         # Initialize goal
         self.goal_pos = None
@@ -108,27 +111,31 @@ class SimpleGoalEnv(BaseRLEnv):
             ee_pos_w, ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Get desired EE pose directly from planner (for IK reward)
-        # This uses the planner's tracked desired pose, not something derived from actual robot pose
-        desired_ee_pos_w, desired_ee_orn_w = self.ee_planner.get_desired_pose()
+        # Desired EE pose for reward: use scaled desired (integrated with n_ee), so we reward tracking at commanded speed
+        desired_ee_pos_w = self.desired_ee_pos_scaled
+        desired_ee_orn_w = self.desired_ee_orn_scaled
 
         # Transform desired EE pose to base frame for IK reward
         desired_ee_pos_b, desired_ee_orn_b = self._world_to_base_frame(
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Compute reward: r = λ_ik * r_ik + λ_acc * r_acc + λ_base * (-||action||^2)
+        # Compute reward (N²M² Eq. 8: n_vel * r_ik + λ_vel * r_vel + ...); penalize only base actions (first 3)
         reward = compute_total_reward(
             ee_pos_b,
             ee_orn_b,
-            action,  # action: action vector
-            prev_action,  # prev_action: previous action vector
-            desired_ee_pos_b,  # desired_ee_pos: desired pose from planner
-            desired_ee_orn_b,  # desired_ee_orn: desired orientation from planner
+            action,
+            prev_action,
+            desired_ee_pos_b,
+            desired_ee_orn_b,
             rot_weight=self.rot_weight,
             ik_penalty_multiplier=self.ik_penalty_multiplier,
             acceleration_penalty_multiplier=self.acceleration_penalty_multiplier,
             base_action_penalty_multiplier=self.base_action_penalty_multiplier,
+            base_action_dim=3,
+            ee_vel_scale=self.ee_vel_scale,
+            v_ee_max=self.ee_vel_scale_max,
+            vel_reward_multiplier=self.vel_reward_multiplier,
         )
 
         return reward

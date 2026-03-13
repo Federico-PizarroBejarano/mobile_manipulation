@@ -37,12 +37,12 @@ class BaseRLEnv(gym.Env):
         self.nv = self.sim.robot.nv  # Number of joint velocities
         self.nu = self.sim.robot.nu  # Number of inputs
 
-        # Action space: N²M² approach - 3D action space
-        # [base_x, base_y, base_yaw]
-        # All actions in range [-1, 1], will be scaled appropriately
+        # Action space: N²M² approach - 4D action space
+        # [base_x, base_y, base_yaw, ee_vel_scale]
+        # ee_vel_scale in [-1, 1] maps to [ee_vel_scale_min, ee_vel_scale_max]: scale applied to planner EE velocity (0 = stop, 1 = full speed)
         self.action_space = spaces.Box(
-            low=-np.ones(3),
-            high=np.ones(3),
+            low=-np.ones(4),
+            high=np.ones(4),
             dtype=np.float32,
         )
 
@@ -69,12 +69,23 @@ class BaseRLEnv(gym.Env):
         planner_vel_range = planner_config.get("vel_range", [0.2, 0.35])
         self.planner_vel_range = tuple(planner_vel_range)
         self.planner_slowdown_distance = planner_config.get("slowdown_distance", 0.1)
+        # EE velocity scale: policy output [-1, 1] maps to [ee_vel_scale_min, 1.0]
+        ee_vel_scale_range = planner_config.get("ee_vel_scale_range", [0.0, 1.0])
+        self.ee_vel_scale_min = float(ee_vel_scale_range[0])
+        self.ee_vel_scale_max = float(ee_vel_scale_range[1])
 
         # End-effector planner (will be initialized in reset)
         self.ee_planner = None
 
         # Store previous action for observation (a_{t-1})
         self.prev_action = np.zeros(self.action_space.shape[0], dtype=np.float32)
+
+        # EE velocity scale from last step (for reward n_vel term); set in step()
+        self.ee_vel_scale = 1.0
+
+        # Scaled desired EE pose: integrated with n_ee each step, used for reward only (obs uses default-speed desired)
+        self.desired_ee_pos_scaled = None
+        self.desired_ee_orn_scaled = None
 
         # Observation space will be defined by subclasses
         obs_dim = self._get_observation_dim()
@@ -248,6 +259,10 @@ class BaseRLEnv(gym.Env):
         )
         self.ee_planner.reset(ee_pos, ee_orn)
 
+        # Scaled desired pose for reward: starts at current EE pose, will be integrated with n_ee each step
+        self.desired_ee_pos_scaled = np.array(ee_pos, dtype=np.float64)
+        self.desired_ee_orn_scaled = np.array(ee_orn, dtype=np.float64)
+
         # Initialize desired EE velocity (zero for first observation)
         self.desired_ee_vel = np.zeros(6, dtype=np.float32)  # [lin_vel(3), ang_vel(3)]
 
@@ -265,7 +280,8 @@ class BaseRLEnv(gym.Env):
         """Execute one step in the environment.
 
         Args:
-            action: Action vector [base_x, base_y, base_yaw] in [-1, 1]
+            action: Action vector [base_x, base_y, base_yaw, ee_vel_scale] in [-1, 1].
+                ee_vel_scale scales the planner EE velocity (0 = min speed, 1 = full speed).
 
         Returns:
             observation, reward, terminated, truncated, info
@@ -273,17 +289,41 @@ class BaseRLEnv(gym.Env):
         # Clip action to action space
         action = np.clip(action, self.action_space.low, self.action_space.high)
 
-        # Convert policy actions to environment actions (unscaled base velocities)
-        base_vel = self._convert_policy_to_env_actions(action)
+        # Convert policy actions to environment actions (unscaled base velocities, first 3 dims)
+        base_vel = self._convert_policy_to_env_actions(action[:3])
 
-        # Get desired end-effector velocity from planner (teleoperator command)
+        # EE velocity scale: map [-1, 1] -> [ee_vel_scale_min, ee_vel_scale_max] (N²M²: policy controls norm of EE motion)
+        ee_vel_scale = self.ee_vel_scale_min + (action[3] + 1.0) * 0.5 * (
+            self.ee_vel_scale_max - self.ee_vel_scale_min
+        )
+        self.ee_vel_scale = ee_vel_scale  # for reward: n_vel in paper Eq. (7)-(8)
+
+        # Get desired EE velocity from planner (reference motion at default speed)
+        # The planner's internal desired pose is independent of ee_vel_scale.
         desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step()
-        desired_ee_vel = np.concatenate([desired_ee_lin_vel, desired_ee_ang_vel])  # 6D
+        desired_ee_vel_raw = np.concatenate(
+            [desired_ee_lin_vel, desired_ee_ang_vel]
+        )  # 6D
 
-        # Store desired velocity for observation
+        # Scale EE velocity by policy output (N²M²: agent can slow down EE motion)
+        desired_ee_vel = desired_ee_vel_raw * ee_vel_scale
+
+        # Store scaled desired velocity for observation (what we command to IK)
         self.desired_ee_vel = desired_ee_vel.copy()
 
-        # Solve IK to get joint velocities using desired velocity directly
+        # Update scaled desired pose for reward: integrate with n_ee so reward compares to "where we commanded to go"
+        self.desired_ee_pos_scaled, self.desired_ee_orn_scaled = (
+            self.ee_planner.integrate_pose(
+                self.ee_planner.desired_pos,
+                self.ee_planner.desired_orn,
+                desired_ee_lin_vel,
+                desired_ee_ang_vel,
+                self.sim.timestep,
+                scale=ee_vel_scale,
+            )
+        )
+
+        # Solve IK to get joint velocities using scaled desired velocity
         joint_velocities = self._solve_ik(desired_ee_vel, base_vel)
 
         # Command robot with computed joint velocities
@@ -302,7 +342,10 @@ class BaseRLEnv(gym.Env):
         # Check deviation from desired pose (for early termination)
         # N²M² paper: terminate if gripper deviates too much for 20+ consecutive steps
         ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
-        desired_ee_pos_w, desired_ee_orn_w = self.ee_planner.get_desired_pose()
+        desired_ee_pos_w, desired_ee_orn_w = (
+            self.desired_ee_pos_scaled,
+            self.desired_ee_orn_scaled,
+        )
 
         # Compute position deviation
         pos_deviation = np.linalg.norm(ee_pos_w - desired_ee_pos_w)
@@ -344,15 +387,15 @@ class BaseRLEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _convert_policy_to_env_actions(self, action):
-        """Convert policy actions from [-1, 1] to actual velocities.
+        """Convert policy actions from [-1, 1] to actual base velocities.
 
         Args:
-            action: Policy action [base_x, base_y, base_yaw] in [-1, 1]
+            action: Policy action [base_x, base_y, base_yaw] in [-1, 1] (first 3 of full action).
 
         Returns:
             ndarray: Base velocities [x, y, yaw] (3,)
         """
-        # Unscale base velocities
+        # Unscale base velocities (action must have at least 3 elements)
         base_vel = np.array(
             [
                 self._unscale_action(
