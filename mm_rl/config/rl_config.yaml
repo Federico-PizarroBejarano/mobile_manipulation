@@ -28,12 +28,13 @@ goal:
   success_pos_threshold: 0.1  # Position success threshold in meters
   success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
 
-# Reward parameters
+# Reward parameters (IK: modulation_rl-style normalized L2, -0.5 when at pos_scale/rot_scale)
 reward:
-  rot_weight: 2.0  # Weight for orientation error relative to position error in IK reward
-  ik_penalty_multiplier: 50.0  # Multiplier for IK reward (λ_ik in paper)
-  acceleration_penalty_multiplier: 0.05  # Multiplier for acceleration penalty (λ_acc in paper)
-  base_action_penalty_multiplier: 0.05   # Penalty on ||action||^2 to discourage aggressive base commands
+  ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik)
+  pos_scale: 0.1   # Position normalization (m), same as modulation_rl ikslack_dist
+  rot_scale: 0.05  # Rotation normalization, same as modulation_rl ikslack_rot_dist
+  acceleration_penalty_multiplier: 0.05
+  base_action_penalty_multiplier: 0.05
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -49,18 +50,23 @@ simulation:
   dynamic_obstacles:
     enabled: false
 
-# Early termination parameters (N²M² paper: terminate if gripper deviates too much for 20+ steps)
+# Early termination (modulation_rl-style: slack + cumulative count, no reset when back within slack)
 termination:
-  deviation_pos_threshold: 0.1   # Position deviation threshold in meters
-  deviation_orn_threshold: 0.05  # Orientation deviation threshold
-  max_consecutive_deviation_steps: 20  # Max consecutive steps with deviation before termination
+  slack_pos_threshold: 0.1   # Step counts as failure if pos deviation > this (m)
+  slack_rot_threshold: 0.05  # Step counts as failure if rot deviation > this
+  ik_fail_thresh: 20         # Terminate when total failure steps >= this
 
 # IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
 ik:
   regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
   use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
 
-# Planner parameters
+# Planner parameters (~modulation_rl: MAX_PLANNER_VELOCITY 0.1 m/s)
 planner:
-  vel_range: [0.2, 0.35]  # Velocity range (min, max) in m/s for planner (slower than default 0.3-0.5)
-  slowdown_distance: 0.1  # Distance in meters from goal where planner starts slowing down
+  vel_range: [0.05, 0.1]  # EE planner speed (m/s), matched to modulation_rl
+  slowdown_distance: 0.1
+
+# Robot speed override (~modulation_rl: base_vel_rng 0.2 m/s, base_rot_rng 0.75 rad/s)
+robot:
+  base_linear_vel_limit: 0.4   # m/s
+  base_angular_vel_limit: 0.75  # rad/s

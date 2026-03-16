@@ -10,33 +10,34 @@ def compute_ik_reward(
     achieved_ee_orn,
     desired_ee_pos,
     desired_ee_orn,
-    rot_weight=0.5,
     ik_penalty_multiplier=1.0,
+    pos_scale=0.1,
+    rot_scale=0.05,
 ):
     """Compute reward/penalty based on IK solution quality.
 
-    This measures how well the achieved end-effector pose matches the desired
-    pose from the planner.
+    Uses modulation_rl-style normalization: scale position and rotation errors
+    so both terms are comparable (-0.5 when at pos_scale/rot_scale away).
+
+    Formula: -0.5 * ((pos_dist/pos_scale)^2 + (rot_dist/rot_scale)^2) * ik_penalty_multiplier
 
     Args:
         achieved_ee_pos: Achieved end-effector position (3,)
         achieved_ee_orn: Achieved end-effector orientation quaternion (4,)
         desired_ee_pos: Desired end-effector position from planner (3,)
         desired_ee_orn: Desired end-effector orientation from planner (4,)
-        rot_weight: Weight for orientation error relative to position error
         ik_penalty_multiplier: Multiplier for IK reward (λ_ik in paper)
+        pos_scale: Scale for position error
+        rot_scale: Scale for rotation error
 
     Returns:
         float: IK reward value (negative, closer to desired = less negative)
     """
-    # Position distance
     pos_dist = np.linalg.norm(achieved_ee_pos - desired_ee_pos)
-
-    # Orientation distance (quaternion distance)
     rot_dist = mm_math.quat_orientation_error(achieved_ee_orn, desired_ee_orn)
 
-    ik_reward = -ik_penalty_multiplier * (pos_dist**2 + rot_weight * rot_dist)
-    return ik_reward
+    scaled = -0.5 * ((pos_dist / pos_scale) ** 2 + (rot_dist / rot_scale) ** 2)
+    return ik_penalty_multiplier * scaled
 
 
 def compute_acceleration_penalty(
@@ -66,15 +67,16 @@ def compute_total_reward(
     prev_action,
     desired_ee_pos,
     desired_ee_orn,
-    rot_weight=0.5,
     ik_penalty_multiplier=1.0,
+    pos_scale=0.1,
+    rot_scale=0.05,
     acceleration_penalty_multiplier=0.01,
     base_action_penalty_multiplier=0.0,
 ):
     """Compute total reward for a step.
 
-    Reward formula: r = λ_ik * r_ik + λ_acc * r_acc
-    where r_ik is the IK penalty and r_acc is the acceleration penalty.
+    Reward formula: r = λ_ik * r_ik + r_acc + r_base
+    with r_ik using normalized position/rotation (modulation_rl-style).
 
     Args:
         ee_pos: End-effector position (3,)
@@ -83,8 +85,9 @@ def compute_total_reward(
         prev_action: Previous action vector (for acceleration penalty)
         desired_ee_pos: Desired end-effector position from planner (3,) for IK reward
         desired_ee_orn: Desired end-effector orientation from planner (4,) for IK reward
-        rot_weight: Weight for orientation error relative to position error in IK reward
         ik_penalty_multiplier: Multiplier for IK reward (λ_ik in paper)
+        pos_scale: Scale for position error
+        rot_scale: Scale for rotation error
         acceleration_penalty_multiplier: Multiplier for acceleration penalty (λ_acc in paper)
         base_action_penalty_multiplier: Multiplier for base action penalty (λ_base in paper)
 
@@ -97,8 +100,9 @@ def compute_total_reward(
         ee_orn,
         desired_ee_pos,
         desired_ee_orn,
-        rot_weight,
-        ik_penalty_multiplier,
+        ik_penalty_multiplier=ik_penalty_multiplier,
+        pos_scale=pos_scale,
+        rot_scale=rot_scale,
     )
 
     # Acceleration penalty

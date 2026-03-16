@@ -27,10 +27,11 @@ class SimpleGoalEnv(BaseRLEnv):
         self.success_pos_threshold = self.goal_config.get("success_pos_threshold")
         self.success_orn_threshold = self.goal_config.get("success_orn_threshold")
 
-        # Reward parameters
+        # Reward parameters (IK uses modulation_rl-style pos_scale/rot_scale normalization)
         self.reward_config = config.get("reward")
-        self.rot_weight = self.reward_config.get("rot_weight")
         self.ik_penalty_multiplier = self.reward_config.get("ik_penalty_multiplier")
+        self.pos_scale = self.reward_config.get("pos_scale", 0.1)
+        self.rot_scale = self.reward_config.get("rot_scale", 0.05)
         self.acceleration_penalty_multiplier = self.reward_config.get(
             "acceleration_penalty_multiplier"
         )
@@ -117,16 +118,16 @@ class SimpleGoalEnv(BaseRLEnv):
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Compute reward: r = λ_ik * r_ik + λ_acc * r_acc + λ_base * (-||action||^2)
         reward = compute_total_reward(
             ee_pos_b,
             ee_orn_b,
-            action,  # action: action vector
-            prev_action,  # prev_action: previous action vector
-            desired_ee_pos_b,  # desired_ee_pos: desired pose from planner
-            desired_ee_orn_b,  # desired_ee_orn: desired orientation from planner
-            rot_weight=self.rot_weight,
+            action,
+            prev_action,
+            desired_ee_pos_b,
+            desired_ee_orn_b,
             ik_penalty_multiplier=self.ik_penalty_multiplier,
+            pos_scale=self.pos_scale,
+            rot_scale=self.rot_scale,
             acceleration_penalty_multiplier=self.acceleration_penalty_multiplier,
             base_action_penalty_multiplier=self.base_action_penalty_multiplier,
         )

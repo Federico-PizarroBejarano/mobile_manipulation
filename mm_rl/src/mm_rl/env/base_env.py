@@ -46,11 +46,22 @@ class BaseRLEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action scaling parameters
-        # Base velocities: x, y, yaw (first 3 joints)
+        # Action scaling parameters (base velocities: x, y, yaw)
         input_limits = self.robot_config.get("limits").get("input")
         self.base_input_low = np.array(input_limits["lower"][:3])
         self.base_input_high = np.array(input_limits["upper"][:3])
+        # Optional override to match modulation_rl speeds (~0.2 m/s linear, ~0.75 rad/s yaw)
+        robot_overrides = config.get("robot", {})
+        if "base_linear_vel_limit" in robot_overrides:
+            lim = float(robot_overrides["base_linear_vel_limit"])
+            self.base_input_low[0] = -lim
+            self.base_input_high[0] = lim
+            self.base_input_low[1] = -lim
+            self.base_input_high[1] = lim
+        if "base_angular_vel_limit" in robot_overrides:
+            lim = float(robot_overrides["base_angular_vel_limit"])
+            self.base_input_low[2] = -lim
+            self.base_input_high[2] = lim
 
         # Clamp joint velocities to limits from config
         velocity_limits = self.robot_config.get("limits").get("state")
@@ -90,18 +101,12 @@ class BaseRLEnv(gym.Env):
         self.goal_pos = None
         self.goal_orn = None
 
-        # Early termination tracking (N²M² paper: terminate if deviates too much for 20+ steps)
+        # Early termination: modulation_rl-style slack + cumulative count (no reset when back within slack)
         termination_config = config.get("termination", {})
-        self.deviation_pos_threshold = termination_config.get(
-            "deviation_pos_threshold", 0.15
-        )
-        self.deviation_orn_threshold = termination_config.get(
-            "deviation_orn_threshold", 0.3
-        )
-        self.max_consecutive_deviation_steps = termination_config.get(
-            "max_consecutive_deviation_steps", 20
-        )
-        self.consecutive_deviation_steps = 0
+        self.slack_pos_threshold = termination_config.get("slack_pos_threshold", 0.1)
+        self.slack_rot_threshold = termination_config.get("slack_rot_threshold", 0.05)
+        self.ik_fail_thresh = termination_config.get("ik_fail_thresh", 20)
+        self.nr_kin_failures = 0
 
     def _get_observation_dim(self):
         """Get observation dimension. Override in subclasses if needed.
@@ -233,8 +238,8 @@ class BaseRLEnv(gym.Env):
         # Reset step counter
         self.current_step = 0
 
-        # Reset deviation tracking
-        self.consecutive_deviation_steps = 0
+        # Reset slack-failure count (cumulative per episode)
+        self.nr_kin_failures = 0
 
         # Initialize/reset end-effector planner if goal is set
         ee_pos, ee_orn = self.sim.robot.link_pose()
@@ -299,26 +304,16 @@ class BaseRLEnv(gym.Env):
         # Get observation
         obs = self._get_observation()
 
-        # Check deviation from desired pose (for early termination)
-        # N²M² paper: terminate if gripper deviates too much for 20+ consecutive steps
+        # Slack-based failure count (modulation_rl-style: cumulative, no reset when back within slack)
         ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
         desired_ee_pos_w, desired_ee_orn_w = self.ee_planner.get_desired_pose()
-
-        # Compute position deviation
         pos_deviation = np.linalg.norm(ee_pos_w - desired_ee_pos_w)
-
-        # Compute orientation deviation (quaternion distance)
         orn_deviation = mm_math.quat_orientation_error(ee_orn_w, desired_ee_orn_w)
-
-        # Check if deviation exceeds thresholds
         if (
-            pos_deviation > self.deviation_pos_threshold
-            or orn_deviation > self.deviation_orn_threshold
+            pos_deviation > self.slack_pos_threshold
+            or orn_deviation > self.slack_rot_threshold
         ):
-            self.consecutive_deviation_steps += 1
-        else:
-            # Reset counter if within threshold
-            self.consecutive_deviation_steps = 0
+            self.nr_kin_failures += 1
 
         # Compute reward (to be implemented by subclasses)
         reward = self._compute_reward(action, self.prev_action)
@@ -329,15 +324,12 @@ class BaseRLEnv(gym.Env):
         terminated = self._check_termination()
         truncated = self.current_step >= self.max_episode_steps
 
-        # Info dict
         info = {
             "step": self.current_step,
             "time": next_t,
-            "consecutive_deviation_steps": self.consecutive_deviation_steps,
-            "terminated_by_deviation": (
-                terminated
-                and self.consecutive_deviation_steps
-                >= self.max_consecutive_deviation_steps
+            "nr_kin_failures": self.nr_kin_failures,
+            "terminated_by_slack": (
+                terminated and self.nr_kin_failures >= self.ik_fail_thresh
             ),
         }
 
@@ -504,18 +496,11 @@ class BaseRLEnv(gym.Env):
     def _check_termination(self):
         """Check if episode should terminate. Override in subclasses.
 
-        Checks for:
-        1. Early termination: gripper deviates too much from desired pose for 20+ consecutive steps
-        2. Goal reached (checked by subclasses)
-
-        Returns:
-            bool: True if episode should terminate
+        Uses modulation_rl-style: terminate when cumulative steps exceeding
+        slack (pos or rot) >= ik_fail_thresh. Counter does not reset when back within slack.
         """
-        # Early termination: deviation too large for too many consecutive steps
-        if self.consecutive_deviation_steps >= self.max_consecutive_deviation_steps:
+        if self.nr_kin_failures >= self.ik_fail_thresh:
             return True
-
-        # Subclasses can override to add goal-based termination
         return False
 
     def close(self):

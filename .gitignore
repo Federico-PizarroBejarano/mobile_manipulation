@@ -22,6 +22,9 @@ results/
 checkpoints/
 logs/
 
+# Cursor Docs
+docs/
+
 # Python Egg
 *.egg
 *.egg-info/
