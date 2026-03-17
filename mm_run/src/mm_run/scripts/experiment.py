@@ -76,19 +76,19 @@ def main():
     ctrl_config = config["controller"]
     planner_config = config.get("planner", None)
 
-    # Simulator
+    # Controller first (e.g. acados build) so GUI does not open and hang during compile
     timestamp = datetime.datetime.now()
-    sim = simulation.BulletSimulation(
-        config=sim_config, timestamp=timestamp, cli_args=args
-    )
-    robot = sim.robot
-
-    # Controller
     control_class = getattr(MPC, ctrl_config["type"], None)
     if control_class is None:
         raise ValueError(f"Unknown controller type: {ctrl_config['type']}")
 
     controller = control_class(ctrl_config)
+
+    # Simulator (GUI opens here only after controller is ready)
+    sim = simulation.BulletSimulation(
+        config=sim_config, timestamp=timestamp, cli_args=args
+    )
+    robot = sim.robot
 
     # Task Manager (simplified - only sequential execution)
     sot = TaskManager(planner_config)

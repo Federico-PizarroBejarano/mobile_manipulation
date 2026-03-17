@@ -1,137 +1,100 @@
-"""End-effector planner for generating desired velocities toward goal."""
+"""Pose-path EE planner: straight-line position + SLERP orientation."""
 
 import numpy as np
 
-from mm_utils import math as mm_math
+from mm_utils.math import omega_from_quat_step, quat_normalize, quat_slerp
+
+# Fixed path discretization (not configurable)
+MIN_PATH_STEPS = 300
 
 
 class EEPlanner:
-    """Simple linear end-effector planner that generates velocities toward goal.
+    """Linear position + SLERP orientation along path parameter s ∈ [0,1]."""
 
-    The planner commands velocities at a fixed magnitude (set randomly on reset)
-    independent of the RL agent's actions, acting as a surrogate teleoperator.
-
-    During training, uses last desired pose instead of current actual pose to
-    prevent RL agent from influencing the trajectory shape.
-    """
-
-    def __init__(
-        self,
-        goal_pos,
-        goal_orn,
-        vel_range=(0.3, 0.5),
-        dt=0.03,
-        np_random=None,
-        slowdown_distance=0.1,
-    ):
-        """Initialize end-effector planner.
+    def __init__(self, goal_pos, goal_orn, start_pos, start_orn, max_linear_speed, dt):
+        """Build pose path from start EE pose to goal.
 
         Args:
             goal_pos: Goal position in world frame (3,)
             goal_orn: Goal orientation quaternion in world frame (4,)
-            vel_range: Tuple (min, max) for random velocity selection (m/s)
-            dt: Time step (s)
-            np_random: Optional numpy random number generator
-            slowdown_distance: Distance in meters from goal where planner starts slowing down
+            start_pos: Start EE position in world frame (3,)
+            start_orn: Start EE orientation quaternion (4,)
+            max_linear_speed: Maximum linear speed (m/s)
+            dt: Control time step (s)
         """
-        self.goal_pos = np.array(goal_pos)
-        self.goal_orn = np.array(goal_orn)
-        self.vel_range = vel_range
-        self.dt = dt
-        self.np_random = np_random
-        self.slowdown_distance = slowdown_distance
+        self.goal_pos = np.asarray(goal_pos, dtype=np.float64)
+        self.goal_orn = quat_normalize(goal_orn)
+        self.max_linear_speed = float(max_linear_speed)
+        self.dt = float(dt)
 
-        # Track desired pose (not actual robot pose)
-        self.desired_pos = None
-        self.desired_orn = None
-        self.planner_vel = None
+        self._start_pos = np.asarray(start_pos, dtype=np.float64).reshape(3)
+        self._start_orn = quat_normalize(start_orn)
+        self._goal_pos = np.asarray(self.goal_pos, dtype=np.float64).reshape(3)
+        self._goal_orn = quat_normalize(self.goal_orn)
 
-    def reset(self, current_pos, current_orn):
-        """Reset planner with current end-effector pose.
+        dist = float(np.linalg.norm(self._goal_pos - self._start_pos))
+        self.n_path_steps = self._compute_n_eff(dist)
+        self.delta_s = 1.0 / self.n_path_steps
 
-        Initializes desired pose to current actual pose at reset.
+        self.s = 0.0
+        self.desired_pos = self._start_pos.copy()
+        self.desired_orn = self._start_orn.copy()
+
+    def _path_pose(self, s):
+        """Compute position and orientation at path parameter s ∈ [0,1].
 
         Args:
-            current_pos: Current end-effector position (3,)
-            current_orn: Current end-effector orientation quaternion (4,)
+            s: Path parameter, in [0, 1]
+
+        Returns:
+            tuple: (position, orientation) in world frame
         """
-        # Initialize desired pose to current pose at reset
-        self.desired_pos = np.array(current_pos)
-        self.desired_orn = np.array(current_orn)
-        # Set random fixed velocity for this episode
-        self.planner_vel = self.np_random.uniform(self.vel_range[0], self.vel_range[1])
+        s = float(np.clip(s, 0.0, 1.0))
+        pos = (1.0 - s) * self._start_pos + s * self._goal_pos
+        orn = quat_slerp(self._start_orn, self._goal_orn, s)
+        return pos, quat_normalize(orn)
+
+    def _compute_n_eff(self, dist):
+        """Compute number of path steps needed to reach goal.
+
+        Args:
+            dist: Distance to goal (m)
+
+        Returns:
+            int: Number of path steps
+        """
+        v_max = self.max_linear_speed
+        n_speed = max(1, int(np.ceil(dist / (v_max * self.dt + 1e-12))))
+        n_eff = max(MIN_PATH_STEPS, n_speed)
+        while dist / (n_eff * self.dt) > v_max + 1e-9:
+            n_eff += 1
+        return n_eff
 
     def step(self):
-        """Step planner forward using fixed velocity set on reset.
-
-        Returns desired end-effector velocity command (teleoperator command).
+        """Compute desired end-effector velocity.
 
         Returns:
             tuple: (desired_lin_vel, desired_ang_vel) in world frame (3,), (3,)
         """
-        # Compute desired linear velocity toward goal from last desired pose
-        pos_error = self.goal_pos - self.desired_pos
-        pos_error_norm = np.linalg.norm(pos_error)
+        if self.s >= 1.0 - 1e-12:
+            self.s = 1.0
+            self.desired_pos = self._goal_pos.copy()
+            self.desired_orn = self._goal_orn.copy()
+            return np.zeros(3), np.zeros(3)
 
-        if pos_error_norm > 1e-6:
-            pos_dir = pos_error / pos_error_norm
-            # Maintain full velocity until within slowdown_distance, then slow down
-            if pos_error_norm > self.slowdown_distance:
-                # Use full planner velocity when far from goal
-                desired_lin_vel = pos_dir * self.planner_vel
-            else:
-                # Slow down proportionally when close to goal
-                desired_lin_vel = (
-                    pos_dir
-                    * (pos_error_norm / self.slowdown_distance)
-                    * self.planner_vel
-                )
-        else:
-            # Reached goal position
-            desired_lin_vel = np.zeros(3)
+        s_prev = self.s
+        self.s = min(self.s + self.delta_s, 1.0)
 
-        # Compute desired angular velocity toward goal orientation
-        orn_error = mm_math.quat_orientation_error(self.desired_orn, self.goal_orn)
+        pos_prev, orn_prev = self._path_pose(s_prev)
+        pos_new, orn_new = self._path_pose(self.s)
 
-        if orn_error > 1e-6:
-            # Compute quaternion difference
-            q_inv = mm_math.quat_inverse(self.desired_orn)
-            q_diff = mm_math.quat_multiply(self.goal_orn, q_inv)
+        v_lin = (pos_new - pos_prev) / self.dt
+        v_ang = omega_from_quat_step(orn_prev, orn_new, self.dt)
 
-            # Convert to axis-angle for angular velocity
-            q_diff_norm = np.linalg.norm(q_diff[:3])
-            if q_diff_norm > 1e-6:
-                axis = q_diff[:3] / q_diff_norm
-                angle = 2 * np.arccos(np.clip(q_diff[3], -1, 1))
+        self.desired_pos = pos_new
+        self.desired_orn = orn_new
 
-                # Angular velocity scale: rad/s per m/s
-                ang_vel_scale = 0.5
-                max_ang_vel = self.planner_vel * ang_vel_scale
-
-                # Desired angular velocity magnitude
-                desired_ang_vel_mag = min(angle / self.dt, max_ang_vel)
-                desired_ang_vel = axis * desired_ang_vel_mag
-            else:
-                desired_ang_vel = np.zeros(3)
-        else:
-            # Reached goal orientation
-            desired_ang_vel = np.zeros(3)
-
-        # Update desired pose based on computed velocities
-        self.desired_pos = self.desired_pos + desired_lin_vel * self.dt
-
-        # Update desired orientation using quaternion integration
-        if np.linalg.norm(desired_ang_vel) > 1e-6:
-            # Quaternion derivative: q_dot = 0.5 * q * [0, wx, wy, wz]
-            # For small rotations: q_new ≈ q * [1, 0.5*dt*wx, 0.5*dt*wy, 0.5*dt*wz]
-            ang_vel_quat = np.zeros(4)
-            ang_vel_quat[:3] = desired_ang_vel * self.dt / 2.0
-            ang_vel_quat[3] = 1.0
-            # Normalize the delta quaternion
-            ang_vel_quat = ang_vel_quat / np.linalg.norm(ang_vel_quat)
-            self.desired_orn = mm_math.quat_multiply(self.desired_orn, ang_vel_quat)
-
-        return desired_lin_vel, desired_ang_vel
+        return v_lin, v_ang
 
     def get_desired_pose(self):
         """Get current desired pose from planner.

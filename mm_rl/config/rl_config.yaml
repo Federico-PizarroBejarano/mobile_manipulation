@@ -61,10 +61,9 @@ ik:
   regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
   use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
 
-# Planner parameters (~modulation_rl: MAX_PLANNER_VELOCITY 0.1 m/s)
+# Planner parameters
 planner:
-  vel_range: [0.05, 0.1]  # EE planner speed (m/s), matched to modulation_rl
-  slowdown_distance: 0.1
+  max_linear_speed: 0.08  # m/s; caps mean linear speed along the position segment of the path
 
 # Robot speed override (~modulation_rl: base_vel_rng 0.2 m/s, base_rot_rng 0.75 rad/s)
 robot:

@@ -151,8 +151,7 @@ def test_ee_planner_with_mpsf(
     max_goal_dist = goal_cfg.get("max_goal_distance", 3.0)
 
     planner_cfg = config.get("planner", {})
-    planner_vel_range = planner_cfg.get("vel_range", [0.2, 0.35])
-    planner_slowdown = planner_cfg.get("slowdown_distance", 0.1)
+    max_lin = float(planner_cfg["max_linear_speed"])
 
     np_random = np.random.RandomState(42)
 
@@ -192,20 +191,17 @@ def test_ee_planner_with_mpsf(
         ee_planner = EEPlanner(
             goal_pos,
             goal_orn,
-            vel_range=tuple(planner_vel_range),
+            ee_pos,
+            ee_orn,
+            max_linear_speed=max_lin,
             dt=sim.timestep,
-            np_random=np_random,
-            slowdown_distance=planner_slowdown,
         )
-        ee_planner.reset(ee_pos, ee_orn)
 
         # Reset controller state for new episode
         controller.reset()
 
-        # Log initial planner velocity
-        initial_vel = ee_planner.planner_vel
         print(
-            f"  Planner velocity: {initial_vel:.3f} m/s, Goal distance: {goal_distance:.2f}m"
+            f"  max_linear_speed: {max_lin:.3f} m/s, Goal distance: {goal_distance:.2f}m"
         )
 
         # Simulation loop

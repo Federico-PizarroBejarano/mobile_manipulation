@@ -2,6 +2,7 @@ import casadi as cs
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as Rot
+from scipy.spatial.transform import Slerp
 from spatialmath.base import q2r, qunit, r2q
 
 QUAT_ORDER = "xyzs"
@@ -103,6 +104,61 @@ def quat_inverse(q):
         ndarray: Inverse quaternion, shape (4,).
     """
     return np.append(-q[:3], q[3])
+
+
+def quat_normalize(q):
+    """Normalize quaternion.
+
+    Args:
+        q (ndarray): Quaternion, shape (4,).
+
+    Returns:
+        ndarray: Normalized quaternion, shape (4,).
+    """
+    q = np.asarray(q, dtype=np.float64).reshape(4)
+    n = np.linalg.norm(q)
+    return q / (n + 1e-12)
+
+
+def quat_slerp(q0, q1, t):
+    """Slerp between two quaternions.
+
+    Args:
+        q0 (ndarray): First quaternion, shape (4,).
+        q1 (ndarray): Second quaternion, shape (4,).
+        t (float): Interpolation parameter, in [0, 1].
+
+    Returns:
+        ndarray: Interpolated quaternion, shape (4,).
+    """
+    t = float(np.clip(t, 0.0, 1.0))
+    q0 = quat_normalize(q0)
+    q1 = quat_normalize(q1)
+    r0 = Rot.from_quat(q0)
+    r1 = Rot.from_quat(q1)
+    key_rots = Rot.concatenate([r0, r1])
+    slerp = Slerp([0.0, 1.0], key_rots)
+    return np.asarray(slerp([t]).as_quat(), dtype=np.float64).reshape(4)
+
+
+def omega_from_quat_step(q0, q1, dt):
+    """Compute angular velocity from quaternion step.
+
+    Args:
+        q0 (ndarray): First quaternion, shape (4,).
+        q1 (ndarray): Second quaternion, shape (4,).
+        dt (float): Time step, in seconds.
+
+    Returns:
+        ndarray: Angular velocity, shape (3,).
+    """
+    if dt < 1e-12:
+        return np.zeros(3)
+    R0 = quat_to_rot(quat_normalize(q0))
+    R1 = quat_to_rot(quat_normalize(q1))
+    R_rel = R1 @ R0.T
+    rotvec = Rot.from_matrix(R_rel).as_rotvec()
+    return rotvec / dt
 
 
 def make_trans_from_vec(rotvec, pos):
