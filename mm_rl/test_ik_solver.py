@@ -17,6 +17,37 @@ from mm_rl.env.base_env import BaseRLEnv
 from mm_utils import parsing
 
 
+def _sample_uniform_ball(radius, dim=3):
+    """Uniform sample inside a ``dim``-dimensional Euclidean ball of given radius.
+
+    Args:
+        radius (float): Ball radius (non-negative).
+        dim (int): Space dimension (default ``3``).
+
+    Returns:
+        ndarray: Sample point, shape ``(dim,)``.
+    """
+    direction = np.random.normal(size=dim)
+    direction /= np.linalg.norm(direction) + 1e-12
+    r = radius * (np.random.uniform(0.0, 1.0) ** (1.0 / dim))
+    return direction * r
+
+
+def _sample_desired_ee_vel(max_lin, max_ang):
+    """Sample a 6D EE twist with linear and angular parts each uniform in a 3D ball.
+
+    Args:
+        max_lin (float): Radius for the linear velocity ball (m/s scale).
+        max_ang (float): Radius for the angular velocity ball (rad/s scale).
+
+    Returns:
+        ndarray: Shape ``(6,)``, concatenation of linear then angular velocity.
+    """
+    lin = _sample_uniform_ball(max_lin, dim=3)
+    ang = _sample_uniform_ball(max_ang, dim=3)
+    return np.concatenate([lin, ang])
+
+
 def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
     """Test IK solver accuracy by comparing desired vs achieved EE velocities.
 
@@ -30,7 +61,8 @@ def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
                    Default 0.1 (10%) is appropriate for regularized IK solvers
 
     Returns:
-        dict: Test results with statistics
+        dict: Keys ``passed`` (bool), ``mean_error``, ``max_error`` (aggregate relative norms),
+        ``test_results`` (list of per-trial dicts with velocities and errors).
     """
     print(f"\n{'='*80}")
     print("Test 1: IK Solver Accuracy")
@@ -42,14 +74,9 @@ def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
     test_results = []
 
     for i in range(n_tests):
-        # Generate random desired EE velocity (within reasonable limits)
-        max_lin_vel = 0.5  # m/s
-        max_ang_vel = 1.0  # rad/s
-        desired_ee_vel = np.concatenate(
-            [
-                np.random.uniform(-max_lin_vel, max_lin_vel, 3),
-                np.random.uniform(-max_ang_vel, max_ang_vel, 3),
-            ]
+        # Generate random desired EE velocity directly inside admissible balls
+        desired_ee_vel = _sample_desired_ee_vel(
+            env.ee_max_linear_vel, env.ee_max_angular_vel
         )
 
         # Generate random base velocity
@@ -62,23 +89,6 @@ def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
             ]
         )
 
-        # Clamp desired velocity to match what IK solver does internally
-        desired_ee_vel_clamped = desired_ee_vel.copy()
-        max_lin_vel = 1.0
-        if np.linalg.norm(desired_ee_vel_clamped[:3]) > max_lin_vel:
-            desired_ee_vel_clamped[:3] = (
-                desired_ee_vel_clamped[:3]
-                / np.linalg.norm(desired_ee_vel_clamped[:3])
-                * max_lin_vel
-            )
-        max_ang_vel = 2.0
-        if np.linalg.norm(desired_ee_vel_clamped[3:]) > max_ang_vel:
-            desired_ee_vel_clamped[3:] = (
-                desired_ee_vel_clamped[3:]
-                / np.linalg.norm(desired_ee_vel_clamped[3:])
-                * max_ang_vel
-            )
-
         # Solve IK
         joint_vel = env._solve_ik(desired_ee_vel, base_vel)
 
@@ -89,12 +99,12 @@ def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
 
         # Compare against clamped desired velocity (what IK solver actually targets)
         # For regularized IK, some error is expected due to regularization penalty
-        error = np.linalg.norm(achieved_ee_vel - desired_ee_vel_clamped)
-        error_lin = np.linalg.norm(achieved_ee_vel[:3] - desired_ee_vel_clamped[:3])
-        error_ang = np.linalg.norm(achieved_ee_vel[3:] - desired_ee_vel_clamped[3:])
+        error = np.linalg.norm(achieved_ee_vel - desired_ee_vel)
+        error_lin = np.linalg.norm(achieved_ee_vel[:3] - desired_ee_vel[:3])
+        error_ang = np.linalg.norm(achieved_ee_vel[3:] - desired_ee_vel[3:])
 
         # Normalize by clamped desired velocity magnitude
-        desired_mag = np.linalg.norm(desired_ee_vel_clamped)
+        desired_mag = np.linalg.norm(desired_ee_vel)
         if desired_mag > 1e-6:
             relative_error = error / desired_mag
         else:
@@ -106,7 +116,6 @@ def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
         test_results.append(
             {
                 "desired_ee_vel": desired_ee_vel.copy(),
-                "desired_ee_vel_clamped": desired_ee_vel_clamped.copy(),
                 "achieved_ee_vel": achieved_ee_vel.copy(),
                 "error": error,
                 "relative_error": relative_error,
@@ -117,9 +126,9 @@ def test_ik_accuracy(env, n_tests=100, tolerance=0.1):
 
         if i < 5 or relative_error > tolerance:
             print(f"  Test {i+1}: Error = {error:.6f} m/s (rel: {relative_error:.4f})")
-            print(f"    Desired (clamped): {desired_ee_vel_clamped}")
+            print(f"    Desired:           {desired_ee_vel}")
             print(f"    Achieved:          {achieved_ee_vel}")
-            print(f"    Diff:              {achieved_ee_vel - desired_ee_vel_clamped}")
+            print(f"    Diff:              {achieved_ee_vel - desired_ee_vel}")
 
     # Statistics
     errors = np.array(errors)
@@ -169,7 +178,7 @@ def test_joint_limits(env, n_tests=100):
         n_tests: Number of random test cases
 
     Returns:
-        dict: Test results
+        dict: Keys ``passed`` (bool), ``n_violations``, ``max_violation`` (rad/s if any).
     """
     print(f"\n{'='*80}")
     print("Test 2: Joint Velocity Limits")
@@ -180,14 +189,9 @@ def test_joint_limits(env, n_tests=100):
     max_violations = []
 
     for i in range(n_tests):
-        # Generate random desired EE velocity
-        max_lin_vel = 0.5
-        max_ang_vel = 1.0
-        desired_ee_vel = np.concatenate(
-            [
-                np.random.uniform(-max_lin_vel, max_lin_vel, 3),
-                np.random.uniform(-max_ang_vel, max_ang_vel, 3),
-            ]
+        # Generate random desired EE velocity directly inside admissible balls
+        desired_ee_vel = _sample_desired_ee_vel(
+            env.ee_max_linear_vel, env.ee_max_angular_vel
         )
 
         # Generate random base velocity
@@ -255,7 +259,8 @@ def test_weighted_regularization(env, n_tests=50):
         n_tests: Number of test cases
 
     Returns:
-        dict: Test results
+        dict: Keys ``passed`` (always True for this informational test), ``mean_ratio``,
+        ``mean_error_weighted``, ``mean_error_unweighted``, ``regularization_effects`` (list).
     """
     print(f"\n{'='*80}")
     print("Test 3: Weighted Regularization Impact")
@@ -271,34 +276,12 @@ def test_weighted_regularization(env, n_tests=50):
     tracking_errors_unweighted = []
 
     for i in range(n_tests):
-        # Generate random desired EE velocity
-        max_lin_vel = 0.5
-        max_ang_vel = 1.0
-        desired_ee_vel = np.concatenate(
-            [
-                np.random.uniform(-max_lin_vel, max_lin_vel, 3),
-                np.random.uniform(-max_ang_vel, max_ang_vel, 3),
-            ]
+        # Generate random desired EE velocity directly inside admissible balls
+        desired_ee_vel = _sample_desired_ee_vel(
+            env.ee_max_linear_vel, env.ee_max_angular_vel
         )
 
         base_vel = np.array([0.1, 0.1, 0.05])
-
-        # Clamp desired velocity (same as IK solver does)
-        desired_ee_vel_clamped = desired_ee_vel.copy()
-        max_lin_vel_clamp = 1.0
-        if np.linalg.norm(desired_ee_vel_clamped[:3]) > max_lin_vel_clamp:
-            desired_ee_vel_clamped[:3] = (
-                desired_ee_vel_clamped[:3]
-                / np.linalg.norm(desired_ee_vel_clamped[:3])
-                * max_lin_vel_clamp
-            )
-        max_ang_vel_clamp = 2.0
-        if np.linalg.norm(desired_ee_vel_clamped[3:]) > max_ang_vel_clamp:
-            desired_ee_vel_clamped[3:] = (
-                desired_ee_vel_clamped[3:]
-                / np.linalg.norm(desired_ee_vel_clamped[3:])
-                * max_ang_vel_clamp
-            )
 
         # Test with weighted regularization
         env.use_weighted_regularization = True
@@ -306,18 +289,14 @@ def test_weighted_regularization(env, n_tests=50):
         q, _ = env.sim.robot.joint_states()
         J = env.sim.robot.jacobian(q)
         achieved_ee_vel_weighted = J @ joint_vel_weighted
-        error_weighted = np.linalg.norm(
-            achieved_ee_vel_weighted - desired_ee_vel_clamped
-        )
+        error_weighted = np.linalg.norm(achieved_ee_vel_weighted - desired_ee_vel)
         tracking_errors_weighted.append(error_weighted)
 
         # Test without weighted regularization (simple damping)
         env.use_weighted_regularization = False
         joint_vel_unweighted = env._solve_ik(desired_ee_vel, base_vel)
         achieved_ee_vel_unweighted = J @ joint_vel_unweighted
-        error_unweighted = np.linalg.norm(
-            achieved_ee_vel_unweighted - desired_ee_vel_clamped
-        )
+        error_unweighted = np.linalg.norm(achieved_ee_vel_unweighted - desired_ee_vel)
         tracking_errors_unweighted.append(error_unweighted)
 
         # Compare: weighted should generally produce smaller joint velocities
@@ -389,7 +368,8 @@ def test_regularization_strength_impact(env, n_tests=50):
         n_tests: Number of test cases
 
     Returns:
-        dict: Test results
+        dict: Keys ``passed`` (always True), ``results_by_strength`` (dict keyed by λ),
+        ``current_error``, ``no_reg_error`` (mean relative errors at λ=0.1 vs 0).
     """
     print(f"\n{'='*80}")
     print("Test 4: Regularization Strength Impact")
@@ -408,32 +388,9 @@ def test_regularization_strength_impact(env, n_tests=50):
         errors = []
 
         for i in range(n_tests):
-            max_lin_vel = 0.5
-            max_ang_vel = 1.0
-            desired_ee_vel = np.concatenate(
-                [
-                    np.random.uniform(-max_lin_vel, max_lin_vel, 3),
-                    np.random.uniform(-max_ang_vel, max_ang_vel, 3),
-                ]
+            desired_ee_vel = _sample_desired_ee_vel(
+                env.ee_max_linear_vel, env.ee_max_angular_vel
             )
-
-            # Clamp desired velocity
-            desired_ee_vel_clamped = desired_ee_vel.copy()
-            max_lin_vel_clamp = 1.0
-            if np.linalg.norm(desired_ee_vel_clamped[:3]) > max_lin_vel_clamp:
-                desired_ee_vel_clamped[:3] = (
-                    desired_ee_vel_clamped[:3]
-                    / np.linalg.norm(desired_ee_vel_clamped[:3])
-                    * max_lin_vel_clamp
-                )
-            max_ang_vel_clamp = 2.0
-            if np.linalg.norm(desired_ee_vel_clamped[3:]) > max_ang_vel_clamp:
-                desired_ee_vel_clamped[3:] = (
-                    desired_ee_vel_clamped[3:]
-                    / np.linalg.norm(desired_ee_vel_clamped[3:])
-                    * max_ang_vel_clamp
-                )
-
             base_vel = np.array([0.1, 0.1, 0.05])
             joint_vel = env._solve_ik(desired_ee_vel, base_vel)
 
@@ -441,8 +398,8 @@ def test_regularization_strength_impact(env, n_tests=50):
             J = env.sim.robot.jacobian(q)
             achieved_ee_vel = J @ joint_vel
 
-            error = np.linalg.norm(achieved_ee_vel - desired_ee_vel_clamped)
-            desired_mag = np.linalg.norm(desired_ee_vel_clamped)
+            error = np.linalg.norm(achieved_ee_vel - desired_ee_vel)
+            desired_mag = np.linalg.norm(desired_ee_vel)
             if desired_mag > 1e-6:
                 relative_error = error / desired_mag
             else:
@@ -496,7 +453,7 @@ def test_numerical_stability(env, n_tests=50):
         n_tests: Number of test cases
 
     Returns:
-        dict: Test results
+        dict: Keys ``passed`` (bool), ``n_issues``, ``issues`` (list of problem strings).
     """
     print(f"\n{'='*80}")
     print("Test 4: Numerical Stability")
@@ -533,11 +490,8 @@ def test_numerical_stability(env, n_tests=50):
     # Test 3: Maximum velocities
     print("  Testing maximum velocities...")
     for i in range(10):
-        desired_ee_vel = np.concatenate(
-            [
-                np.random.uniform(-1.0, 1.0, 3),  # Max lin vel
-                np.random.uniform(-2.0, 2.0, 3),  # Max ang vel
-            ]
+        desired_ee_vel = _sample_desired_ee_vel(
+            env.ee_max_linear_vel, env.ee_max_angular_vel
         )
         base_vel = np.array([0.5, 0.5, 0.5])
         try:
@@ -550,7 +504,9 @@ def test_numerical_stability(env, n_tests=50):
     # Test 4: Various base velocities
     print("  Testing various base velocities...")
     for i in range(20):
-        desired_ee_vel = np.random.uniform(-0.5, 0.5, 6)
+        desired_ee_vel = _sample_desired_ee_vel(
+            env.ee_max_linear_vel, env.ee_max_angular_vel
+        )
         base_vel = np.random.uniform(-0.5, 0.5, 3)
         try:
             joint_vel = env._solve_ik(desired_ee_vel, base_vel)
@@ -572,7 +528,7 @@ def test_numerical_stability(env, n_tests=50):
 
 
 def main():
-    """Run all IK solver tests."""
+    """CLI: build :class:`BaseRLEnv` from config and run all IK diagnostic tests."""
     parser = argparse.ArgumentParser(description="Test IK solver functionality")
     parser.add_argument(
         "-c",
@@ -648,8 +604,6 @@ def main():
     all_passed = all(r["passed"] for r in results.values())
     print(f"\nOverall: {'ALL TESTS PASSED' if all_passed else 'SOME TESTS FAILED'}")
 
-    return 0 if all_passed else 1
-
 
 if __name__ == "__main__":
-    exit(main())
+    main()

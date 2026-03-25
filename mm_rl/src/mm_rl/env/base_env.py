@@ -18,7 +18,8 @@ class BaseRLEnv(gym.Env):
         """Initialize base RL environment.
 
         Args:
-            config: Configuration dictionary with simulation and robot parameters
+            config (dict): Simulation, controller, planner, IK, reward, and termination
+                settings (see YAML merged by :mod:`mm_utils.parsing`).
         """
         super().__init__()
 
@@ -27,6 +28,7 @@ class BaseRLEnv(gym.Env):
         self.sim_config = config.get("simulation")
         # Robot config might be nested under controller.robot
         self.robot_config = config.get("controller").get("robot")
+        self.planner_mode = config.get("planner_mode", "open_loop")
 
         # Initialize simulation
         timestamp = datetime.now()
@@ -62,6 +64,10 @@ class BaseRLEnv(gym.Env):
             lim = float(robot_overrides["base_angular_vel_limit"])
             self.base_input_low[2] = -lim
             self.base_input_high[2] = lim
+        self.ee_max_linear_vel = float(robot_overrides.get("ee_linear_vel_limit", 0.5))
+        self.ee_max_angular_vel = float(
+            robot_overrides.get("ee_angular_vel_limit", 0.75)
+        )
 
         # Clamp joint velocities to limits from config
         velocity_limits = self.robot_config.get("limits").get("state")
@@ -115,6 +121,9 @@ class BaseRLEnv(gym.Env):
         - g: goal pose (12D: 3D position + 9D rotation matrix)
         - s_{robot}: joint positions (nq)
         - a_{t-1}: previous action (action_dim)
+
+        Returns:
+            int: Flat observation size ``6 + 12*3 + nq + action_dim``.
         """
         return 6 + 12 + 12 + 12 + self.nq + self.action_space.shape[0]
 
@@ -221,11 +230,13 @@ class BaseRLEnv(gym.Env):
         """Reset environment.
 
         Args:
-            seed: Random seed
-            options: Optional dict with reset options
+            seed (int, optional): Passed to :meth:`gymnasium.Env.reset` for RNG.
+            options (dict, optional): May include ``disable_early_termination`` (bool):
+                when True, :meth:`_check_termination` never fires from slack failures.
 
         Returns:
-            observation, info
+            tuple: ``(observation, info)`` with ``observation`` shape matching
+            :attr:`observation_space` and ``info`` containing at least ``step`` and ``time``.
         """
         super().reset(seed=seed)
 
@@ -238,6 +249,11 @@ class BaseRLEnv(gym.Env):
         # Reset slack-failure count (cumulative per episode)
         self.nr_kin_failures = 0
 
+        opts = options or {}
+        self.disable_early_termination = bool(
+            opts.get("disable_early_termination", False)
+        )
+
         # Initialize/reset end-effector planner if goal is set
         ee_pos, ee_orn = self.sim.robot.link_pose()
         self.ee_planner = EEPlanner(
@@ -247,6 +263,7 @@ class BaseRLEnv(gym.Env):
             ee_orn,
             self.planner_max_linear_speed,
             self.sim.timestep,
+            planner_mode=self.planner_mode,
         )
 
         # Initialize desired EE velocity (zero for first observation)
@@ -278,7 +295,13 @@ class BaseRLEnv(gym.Env):
         base_vel = self._convert_policy_to_env_actions(action)
 
         # Get desired end-effector velocity from planner (teleoperator command)
-        desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step()
+        if self.planner_mode == "closed_loop":
+            ee_pos_now, ee_orn_now = self.sim.robot.link_pose()
+            desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step(
+                ee_pos_now, ee_orn_now
+            )
+        else:
+            desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step()
         desired_ee_vel = np.concatenate([desired_ee_lin_vel, desired_ee_ang_vel])  # 6D
 
         # Store desired velocity for observation
@@ -391,23 +414,9 @@ class BaseRLEnv(gym.Env):
         # Get current joint state
         q, _ = self.sim.robot.joint_states()
 
-        # Clamp desired velocities to reasonable limits (make a copy to avoid modifying input)
-        desired_ee_vel_clamped = desired_ee_vel.copy()
-        max_lin_vel = 1.0
-        if np.linalg.norm(desired_ee_vel_clamped[:3]) > max_lin_vel:
-            desired_ee_vel_clamped[:3] = (
-                desired_ee_vel_clamped[:3]
-                / np.linalg.norm(desired_ee_vel_clamped[:3])
-                * max_lin_vel
-            )
-
-        max_ang_vel = 2.0
-        if np.linalg.norm(desired_ee_vel_clamped[3:]) > max_ang_vel:
-            desired_ee_vel_clamped[3:] = (
-                desired_ee_vel_clamped[3:]
-                / np.linalg.norm(desired_ee_vel_clamped[3:])
-                * max_ang_vel
-            )
+        desired_ee_vel_clamped = mm_math.clamp_ee_velocity(
+            desired_ee_vel, self.ee_max_linear_vel, self.ee_max_angular_vel
+        )
 
         # Get Jacobian
         J = self.sim.robot.jacobian(q)
@@ -494,13 +503,19 @@ class BaseRLEnv(gym.Env):
 
         Uses modulation_rl-style: terminate when cumulative steps exceeding
         slack (pos or rot) >= ik_fail_thresh. Counter does not reset when back within slack.
+
+        Returns:
+            bool: ``True`` if slack-based failure count reached the threshold; ``False``
+            if early termination is disabled or the count is still below the threshold.
         """
+        if self.disable_early_termination:
+            return False
         if self.nr_kin_failures >= self.ik_fail_thresh:
             return True
         return False
 
     def close(self):
-        """Clean up environment."""
+        """Disconnect the PyBullet client used by the wrapped simulation."""
         import pybullet as pyb
 
         pyb.disconnect()

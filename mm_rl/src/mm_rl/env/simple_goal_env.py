@@ -14,7 +14,8 @@ class SimpleGoalEnv(BaseRLEnv):
         """Initialize simple goal environment.
 
         Args:
-            config: Configuration dictionary
+            config (dict): Must include ``goal``, ``reward``, and base keys expected by
+                :class:`BaseRLEnv`.
         """
         super().__init__(config)
 
@@ -47,14 +48,21 @@ class SimpleGoalEnv(BaseRLEnv):
         """Reset environment and generate new goal.
 
         Args:
-            seed: Random seed
-            options: Optional dict with reset options
+            seed (int, optional): Forwarded to the parent reset for RNG.
+            options (dict, optional): May set ``goal_pos`` and ``goal_orn`` together to
+                skip random goal sampling; ``disable_early_termination`` is forwarded to
+                :meth:`BaseRLEnv.reset`.
 
         Returns:
-            observation, info
+            tuple: ``(observation, info)`` with ``info`` also containing ``goal_pos`` and
+            ``goal_orn`` copies.
         """
-        # Generate random goal first (before calling super().reset())
-        self._generate_goal()
+        options = options or {}
+        if "goal_pos" in options and "goal_orn" in options:
+            self.goal_pos = np.asarray(options["goal_pos"], dtype=np.float64).reshape(3)
+            self.goal_orn = np.asarray(options["goal_orn"], dtype=np.float64).reshape(4)
+        else:
+            self._generate_goal()
 
         # Now reset (this will initialize the EE planner with the goal)
         obs, info = super().reset(seed=seed, options=options)

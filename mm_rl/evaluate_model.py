@@ -1,100 +1,299 @@
-"""Evaluate a trained model with visualization.
-
-Command:
+"""Evaluate RL checkpoint and optionally compare to MPSF on identical goals.
 
 ```bash
 cd /home/federico/catkin_ws/src/mobile_manipulation
-python3 mm_rl/evaluate_model.py -c mm_rl/config/train_config.yaml --checkpoint checkpoints/final_model.pth --gui --n-episodes 3
+python3 -m mm_rl.evaluate_model -c mm_rl/config/train_config.yaml \\
+  --checkpoint checkpoints/final_model.pth --n-episodes 10 --seed 3
+
+# RL vs MPSF, same goals (from --seed), RL runs full horizon (no early term):
+python3 -m mm_rl.evaluate_model -c mm_rl/config/train_config.yaml \\
+  --checkpoint checkpoints/final_model.pth --compare-mpsf --seed 3 --n-episodes 5
+
+# Optional: use closed-loop planner for MPSF rollouts
+python3 -m mm_rl.evaluate_model -c mm_rl/config/train_config.yaml \\
+  --checkpoint checkpoints/final_model.pth --compare-mpsf --closed-loop-planner --seed 3 --n-episodes 5
+```
 """
 
 import argparse
+import datetime
+import pickle
 import time
 from pathlib import Path
 
 import numpy as np
 
+import mm_control.MPC as MPC
+from mm_rl.env.ee_planner import EEPlanner
 from mm_rl.env.simple_goal_env import SimpleGoalEnv
+from mm_rl.evaluate_experiment import EpisodeTelemetry, print_report
+from mm_rl.mpsf_helpers import (
+    build_ik_params_from_config,
+    ensure_controller_config,
+    generate_goal,
+    setup_mpsf_config,
+    solve_ik,
+)
 from mm_rl.sac.sac import SAC
+from mm_simulator import simulation
 from mm_utils import math as mm_math
 from mm_utils import parsing
 
 
 def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Evaluate trained RL model")
-    parser.add_argument(
-        "-c", "--config", required=True, help="Path to configuration file"
-    )
+    """Parse command-line arguments for RL evaluation and optional MPSF comparison.
+
+    Returns:
+        argparse.Namespace: Parsed arguments (``config``, ``checkpoint``, ``n_episodes``,
+        ``gui``, ``seed``, ``compare_mpsf``, ``use_ik_solver``, ``closed_loop_planner``).
+    """
+    parser = argparse.ArgumentParser(description="Evaluate RL and/or compare to MPSF")
+    parser.add_argument("-c", "--config", required=True, help="Training config YAML")
     parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
-        help="Path to model checkpoint (.pth file)",
+        help="RL checkpoint (.pth)",
     )
+    parser.add_argument("--n-episodes", type=int, default=5)
+    parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--seed", type=int, default=None, help="RL / env seed")
     parser.add_argument(
-        "--n-episodes",
-        type=int,
-        default=5,
-        help="Number of episodes to run",
-    )
-    parser.add_argument(
-        "--gui",
+        "--compare-mpsf",
         action="store_true",
-        help="Enable GUI visualization",
+        help="After RL, run MPSF on the same goals and print side-by-side summary",
     )
     parser.add_argument(
-        "--save-trajectory",
+        "--use-ik-solver",
         action="store_true",
-        help="Save trajectory data to file",
+        help="MPSF: use Jacobian IK path like RL (MPC base vel + IK arm)",
     )
     parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="./logs",
-        help="Directory to save evaluation results",
+        "--closed-loop-planner",
+        action="store_true",
+        help="Use closed-loop EEPlanner for MPSF rollouts (default: open-loop)",
     )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for evaluation",
-    )
-
     return parser.parse_args()
 
 
-def evaluate_episode(env, agent, episode_num, save_trajectory=False):
-    """Run a single evaluation episode.
+def sample_goals(config, n_episodes, seed):
+    """Build a reproducible list of sampled goals for evaluation.
 
     Args:
-        env: Environment
-        agent: SAC agent
-        episode_num: Episode number
-        save_trajectory: Whether to save trajectory data
+        config (dict): Must contain ``goal.pos_range`` and ``goal.orn_range``.
+        n_episodes (int): Number of goals to draw.
+        seed (int): Seed for :class:`numpy.random.RandomState`.
 
     Returns:
-        dict: Episode results
+        list: Length ``n_episodes``; each element is ``(goal_pos, goal_orn)`` as
+        ``numpy`` arrays (position shape ``(3,)``, quaternion shape ``(4,)``).
     """
-    obs, info = env.reset()
+    g = config["goal"]
+    rng = np.random.RandomState(seed)
+    goals = []
+    for _ in range(n_episodes):
+        goal_pos, goal_orn = generate_goal(g["pos_range"], g["orn_range"], rng)
+        goals.append((goal_pos.copy(), goal_orn.copy()))
+    return goals
+
+
+def run_mpsf_episode(
+    mpsf_runtime,
+    episode_num,
+    goal_pos,
+    goal_orn,
+    max_episode_steps,
+    ee_max_linear_vel,
+    ee_max_angular_vel,
+    use_ik_solver,
+):
+    """Roll out one MPSF episode using a prebuilt runtime (no sim/controller rebuild).
+
+    Args:
+        mpsf_runtime (dict): From :func:`create_mpsf_runtime` (``sim``, ``robot``,
+            ``controller``, ``ik_params``, ``ctrl_period``, etc.).
+        episode_num (int): Index used only for logging.
+        goal_pos (ndarray): Goal position in world frame, shape ``(3,)``.
+        goal_orn (ndarray): Goal orientation quaternion (xyzs), shape ``(4,)``.
+        max_episode_steps (int): Maximum simulation steps before stopping.
+        ee_max_linear_vel (float): EE linear-norm clamp when ``use_ik_solver`` is True.
+        ee_max_angular_vel (float): EE angular-norm clamp when ``use_ik_solver`` is True.
+        use_ik_solver (bool): If True, apply :func:`mm_rl.mpsf_helpers.solve_ik` with
+            MPC base velocity; if False, command full ``v_bar`` from MPC.
+
+    Returns:
+        dict: Episode summary plus raw traces for offline analysis.
+    """
+    print(f"\nEpisode {episode_num}:")
+    print(f"  Goal position: {goal_pos}")
+    print(f"  Goal orientation: {goal_orn}")
+
+    config = mpsf_runtime["config"]
+    sim = mpsf_runtime["sim"]
+    robot = mpsf_runtime["robot"]
+    controller = mpsf_runtime["controller"]
+    nu = mpsf_runtime["nu"]
+    ik_params = mpsf_runtime["ik_params"]
+    ctrl_period = mpsf_runtime["ctrl_period"]
+    max_lin = mpsf_runtime["planner_max_linear_speed"]
+    dt = mpsf_runtime["dt"]
+    planner_mode = mpsf_runtime["planner_mode"]
+
+    gcfg = config["goal"]
+    success_pos_threshold = float(gcfg["success_pos_threshold"])
+    success_orn_threshold = float(gcfg["success_orn_threshold"])
+
+    robot.reset_joint_configuration(robot.home)
+    ee_pos, ee_orn = robot.link_pose()
+    ee_planner = EEPlanner(
+        goal_pos,
+        goal_orn,
+        ee_pos,
+        ee_orn,
+        max_lin,
+        dt,
+        planner_mode=planner_mode,
+    )
+    controller.reset()
+
+    start_time = time.time()
+    t = 0.0
+    last_controller_time = -ctrl_period
+    v_bar = None
+
+    episode_length = 0
+    pos_err = 0.0
+    orn_err = 0.0
+    tel = EpisodeTelemetry(robot)
+    for _step in range(max_episode_steps):
+        robot_states = robot.joint_states(add_noise=False)
+        if planner_mode == "closed_loop":
+            ee_pos_now, ee_orn_now = robot.link_pose()
+            desired_lin, desired_ang_w = ee_planner.step(ee_pos_now, ee_orn_now)
+        else:
+            _, ee_orn_now = robot.link_pose()
+            desired_lin, desired_ang_w = ee_planner.step()
+        clamp = (ee_max_linear_vel, ee_max_angular_vel) if use_ik_solver else None
+        desired_ee_vel_world, desired_ee_vel_mpc = (
+            mm_math.ee_twist_world_and_mpc_reference(
+                desired_lin, desired_ang_w, ee_orn_now, clamp_limits=clamp
+            )
+        )
+
+        if t - last_controller_time >= ctrl_period:
+            references = {
+                "base_pose": None,
+                "base_velocity": None,
+                "ee_pose": None,
+                "ee_velocity": None,
+                "desired_velocity": {"ee_velocity": desired_ee_vel_mpc},
+            }
+            try:
+                v_bar, _ = controller.control(t, robot_states, references)
+                last_controller_time = t
+            except Exception:
+                v_bar = None
+
+        if use_ik_solver and v_bar is not None:
+            mpc_base = v_bar[1, :3]
+            u = solve_ik(robot, desired_ee_vel_world, mpc_base, ik_params)
+        elif v_bar is not None:
+            u = v_bar[1, :]
+        else:
+            u = np.zeros(nu)
+
+        robot.command_velocity(u)
+        t, _ = sim.step(t)
+        tel.accumulate_step(robot, goal_pos=goal_pos, goal_orn=goal_orn)
+
+        episode_length = _step + 1
+        ee_pos_f, ee_orn_f = robot.link_pose()
+        pos_err = float(np.linalg.norm(ee_pos_f - goal_pos))
+        orn_err = float(mm_math.quat_orientation_error(ee_orn_f, goal_orn))
+        if pos_err <= success_pos_threshold and orn_err <= success_orn_threshold:
+            break
+
+    success = pos_err <= success_pos_threshold and orn_err <= success_orn_threshold
+
+    elapsed_time = time.time() - start_time
+    print("  Episode completed:")
+    print(f"    Length: {episode_length} steps ({elapsed_time:.2f} seconds)")
+    print(f"    Final position error: {pos_err:.3f} m")
+    print(f"    Final orientation error: {orn_err:.3f}")
+    print(f"    Success: {'Yes' if success else 'No'}")
+    print(
+        f"    Effort [base/arm]: {tel.base_effort:.3f} / {tel.arm_effort:.3f} "
+        f" Smoothness [base/arm]: {tel.base_smoothness:.3f} / {tel.arm_smoothness:.3f}"
+    )
+    print(f"    Base path length: {tel.base_path_length:.3f} m")
+
+    return {
+        "episode_num": episode_num,
+        "pos_error": pos_err,
+        "orn_error": orn_err,
+        "success": success,
+        "length": episode_length,
+        "elapsed_time": elapsed_time,
+        **tel.as_dict(),
+    }
+
+
+def create_mpsf_runtime(config):
+    """Instantiate Bullet sim, MPC controller, and IK metadata for MPSF rollouts.
+
+    Expects ``ensure_controller_config`` and (for MPSF tests) ``setup_mpsf_config``
+    to have been applied to ``config`` beforehand.
+
+    Args:
+        config (dict): Full merged YAML including ``controller``, ``simulation``,
+            ``planner``, and ``planner_mode`` (optional).
+
+    Returns:
+        dict: Keys ``config``, ``sim``, ``robot``, ``controller``, ``nu``, ``ik_params``,
+            ``ctrl_period``, ``planner_max_linear_speed``, ``dt``, ``planner_mode``.
+    """
+    ctrl_config = config["controller"]
+    sim_config = config["simulation"]
+    nu = sim_config["robot"]["dims"]["v"]
+    nq = sim_config["robot"]["dims"]["q"]
+    ik_params = build_ik_params_from_config(config, nu, nq)
+
+    timestamp = datetime.datetime.now()
+    controller = MPC.MPC(ctrl_config)
+    sim = simulation.BulletSimulation(sim_config, timestamp, cli_args=None)
+    return {
+        "config": config,
+        "sim": sim,
+        "robot": sim.robot,
+        "controller": controller,
+        "nu": nu,
+        "ik_params": ik_params,
+        "ctrl_period": 1.0 / ctrl_config.get("ctrl_rate", 10.0),
+        "planner_max_linear_speed": float(config["planner"]["max_linear_speed"]),
+        "dt": float(sim_config["timestep"]),
+        "planner_mode": config.get("planner_mode"),
+    }
+
+
+def evaluate_episode(env, agent, episode_num, reset_options=None):
+    """Run one RL episode with deterministic actions and print per-episode progress.
+
+    Args:
+        env (SimpleGoalEnv): Initialized environment.
+        agent (SAC): Loaded agent; ``select_action(..., deterministic=True)`` is used.
+        episode_num (int): Label for logs only.
+        reset_options (dict, optional): Passed to ``env.reset(options=...)`` (e.g.
+            ``goal_pos``, ``goal_orn``, ``disable_early_termination``).
+
+    Returns:
+        dict: Episode summary plus raw traces for offline analysis.
+    """
+    reset_options = reset_options or {}
+    obs, info = env.reset(options=reset_options)
     episode_reward = 0
     episode_length = 0
     done = False
-
-    # Store trajectory if requested
-    trajectory = (
-        {
-            "observations": [],
-            "actions": [],
-            "rewards": [],
-            "ee_positions": [],
-            "ee_orientations": [],
-            "goal_positions": [],
-            "goal_orientations": [],
-            "base_positions": [],
-        }
-        if save_trajectory
-        else None
-    )
+    tel = EpisodeTelemetry(env.sim.robot)
 
     print(f"\nEpisode {episode_num}:")
     print(f"  Goal position: {info['goal_pos']}")
@@ -103,32 +302,18 @@ def evaluate_episode(env, agent, episode_num, save_trajectory=False):
     start_time = time.time()
 
     while not done:
-        # Select action (deterministic for evaluation)
         action = agent.select_action(obs, deterministic=True)
-
-        # Step environment
         obs, reward, terminated, truncated, info = env.step(action)
-
         episode_reward += reward
         episode_length += 1
         done = terminated or truncated
+        tel.accumulate_step(
+            env.sim.robot,
+            goal_pos=env.goal_pos,
+            goal_orn=env.goal_orn,
+            reward=reward,
+        )
 
-        # Store trajectory data
-        if save_trajectory:
-            # Get current robot state
-            ee_pos, ee_orn = env.sim.robot.link_pose()
-            base_pos, base_orn = env.sim.robot.link_pose(link_idx=-1)
-
-            trajectory["observations"].append(obs.copy())
-            trajectory["actions"].append(action.copy())
-            trajectory["rewards"].append(reward)
-            trajectory["ee_positions"].append(ee_pos.copy())
-            trajectory["ee_orientations"].append(ee_orn.copy())
-            trajectory["goal_positions"].append(env.goal_pos.copy())
-            trajectory["goal_orientations"].append(env.goal_orn.copy())
-            trajectory["base_positions"].append(base_pos.copy())
-
-        # Print progress every 100 steps
         if episode_length % 100 == 0:
             ee_pos, ee_orn = env.sim.robot.link_pose()
             pos_error = np.linalg.norm(ee_pos - env.goal_pos)
@@ -139,15 +324,11 @@ def evaluate_episode(env, agent, episode_num, save_trajectory=False):
             )
 
     elapsed_time = time.time() - start_time
-
-    # Final state
     ee_pos, ee_orn = env.sim.robot.link_pose()
     pos_error = np.linalg.norm(ee_pos - env.goal_pos)
     orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
-    # Check if goal was actually reached (not just early termination)
     success = (
-        terminated
-        and pos_error <= env.success_pos_threshold
+        pos_error <= env.success_pos_threshold
         and orn_error <= env.success_orn_threshold
     )
 
@@ -157,8 +338,13 @@ def evaluate_episode(env, agent, episode_num, save_trajectory=False):
     print(f"    Final position error: {pos_error:.3f} m")
     print(f"    Final orientation error: {orn_error:.3f}")
     print(f"    Success: {'Yes' if success else 'No'}")
+    print(
+        f"    Effort [base/arm]: {tel.base_effort:.3f} / {tel.arm_effort:.3f} "
+        f" Smoothness [base/arm]: {tel.base_smoothness:.3f} / {tel.arm_smoothness:.3f}"
+    )
+    print(f"    Base path length: {tel.base_path_length:.3f} m")
 
-    results = {
+    return {
         "episode_num": episode_num,
         "reward": episode_reward,
         "length": episode_length,
@@ -166,53 +352,48 @@ def evaluate_episode(env, agent, episode_num, save_trajectory=False):
         "pos_error": pos_error,
         "orn_error": orn_error,
         "elapsed_time": elapsed_time,
+        **tel.as_dict(),
     }
-
-    if save_trajectory:
-        results["trajectory"] = trajectory
-
-    return results
 
 
 def main():
-    """Main evaluation function."""
+    """Load config/checkpoint, run episodes, and dump full results to pickle."""
     args = parse_args()
-
-    # Load configuration
     config = parsing.load_config(args.config)
 
-    # Override GUI setting if specified
     if args.gui:
         config["simulation"]["gui"] = True
         print("GUI visualization enabled")
 
-    # Create output directory
-    output_dir = Path(args.output_dir)
+    goal_seed = args.seed if args.seed is not None else 0
+    run_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path("./logs")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize environment
-    print("Initializing environment...")
-    env = SimpleGoalEnv(config)
+    max_steps = int(config["simulation"]["max_episode_steps"])
+    # Evaluation always runs full horizon; no early termination.
+    rl_reset_extras = {"disable_early_termination": True}
 
-    # Get dimensions
+    ensure_controller_config(config)
+    config["planner_mode"] = "closed_loop" if args.closed_loop_planner else "open_loop"
+    goals = sample_goals(config, args.n_episodes, goal_seed)
+
+    if args.compare_mpsf:
+        setup_mpsf_config(config["controller"])
+        print(f"Compare mode: {args.n_episodes} goals from goal_seed={goal_seed}")
+
+    print("Initializing RL environment...")
+    env = SimpleGoalEnv(config)
     obs_shape = env.observation_space.shape
     action_shape = env.action_space.shape
-    if obs_shape is None or action_shape is None:
-        raise ValueError("Observation or action space shape is None")
     state_dim = obs_shape[0]
     action_dim = action_shape[0]
-    action_range = (-1.0, 1.0)
-
-    print(f"State dimension: {state_dim}")
-    print(f"Action dimension: {action_dim}")
-
-    # Initialize SAC agent
     rl_config = config.get("rl")
     sac_config = rl_config.get("sac")
     agent = SAC(
         state_dim=state_dim,
         action_dim=action_dim,
-        action_range=action_range,
+        action_range=(-1.0, 1.0),
         lr=sac_config.get("lr"),
         gamma=sac_config.get("gamma"),
         tau=sac_config.get("tau"),
@@ -222,98 +403,95 @@ def main():
         buffer_size=sac_config.get("buffer_size", 100000),
         device="cpu",
     )
-
-    # Load checkpoint
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    print(f"\nLoading checkpoint from: {checkpoint_path}")
+    print(f"Loading checkpoint: {checkpoint_path}")
     agent.load(str(checkpoint_path))
-    print("Checkpoint loaded successfully")
 
-    # Set seed if specified
     if args.seed is not None:
         env.reset(seed=args.seed)
-        print(f"Using random seed: {args.seed}")
+        print(f"Env seed: {args.seed}")
 
-    # Run evaluation episodes
-    print(f"\n{'='*80}")
-    print(f"Running {args.n_episodes} evaluation episodes")
-    print(f"{'='*80}")
-
-    all_results = []
-    for episode_num in range(1, args.n_episodes + 1):
-        results = evaluate_episode(
-            env, agent, episode_num, save_trajectory=args.save_trajectory
+    print(f"\n{'='*80}\nRL evaluation ({args.n_episodes} episodes)\n{'='*80}")
+    all_rl = []
+    for ep in range(1, args.n_episodes + 1):
+        ro = {**rl_reset_extras}
+        gp, go = goals[ep - 1]
+        ro["goal_pos"] = gp
+        ro["goal_orn"] = go
+        all_rl.append(
+            evaluate_episode(
+                env,
+                agent,
+                ep,
+                reset_options=ro if ro else None,
+            )
         )
-        all_results.append(results)
-
-        # Small delay between episodes for visualization
         if args.gui:
-            time.sleep(1.0)
-
-    # Print summary
-    print(f"\n{'='*80}")
-    print("EVALUATION SUMMARY")
-    print(f"{'='*80}")
-
-    rewards = [r["reward"] for r in all_results]
-    lengths = [r["length"] for r in all_results]
-    successes = [r["success"] for r in all_results]
-    pos_errors = [r["pos_error"] for r in all_results]
-    orn_errors = [r["orn_error"] for r in all_results]
-
-    print(f"\nEpisodes: {args.n_episodes}")
-    print(
-        f"Success rate: {sum(successes)}/{args.n_episodes} ({100*sum(successes)/args.n_episodes:.1f}%)"
-    )
-    print("\nRewards:")
-    print(f"  Mean: {np.mean(rewards):.3f} ± {np.std(rewards):.3f}")
-    print(f"  Min: {np.min(rewards):.3f}, Max: {np.max(rewards):.3f}")
-    print("\nEpisode lengths:")
-    print(f"  Mean: {np.mean(lengths):.1f} ± {np.std(lengths):.1f}")
-    print(f"  Min: {np.min(lengths)}, Max: {np.max(lengths)}")
-    print("\nFinal position errors:")
-    print(f"  Mean: {np.mean(pos_errors):.3f} ± {np.std(pos_errors):.3f} m")
-    print(f"  Min: {np.min(pos_errors):.3f} m, Max: {np.max(pos_errors):.3f} m")
-    print("\nFinal orientation errors:")
-    print(f"  Mean: {np.mean(orn_errors):.3f} ± {np.std(orn_errors):.3f}")
-    print(f"  Min: {np.min(orn_errors):.3f}, Max: {np.max(orn_errors):.3f}")
-
-    # Save results
-    if args.save_trajectory:
-        import pickle
-
-        results_file = output_dir / "evaluation_results.pkl"
-        with open(results_file, "wb") as f:
-            pickle.dump(all_results, f)
-        print(f"\nSaved trajectory data to: {results_file}")
-
-    # Save summary
-    summary_file = output_dir / "evaluation_summary.txt"
-    with open(summary_file, "w") as f:
-        f.write("EVALUATION SUMMARY\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(f"Checkpoint: {checkpoint_path}\n")
-        f.write(f"Config: {args.config}\n")
-        f.write(f"Episodes: {args.n_episodes}\n\n")
-        f.write(
-            f"Success rate: {sum(successes)}/{args.n_episodes} ({100*sum(successes)/args.n_episodes:.1f}%)\n\n"
-        )
-        f.write(f"Rewards: {np.mean(rewards):.3f} ± {np.std(rewards):.3f}\n")
-        f.write(f"Episode lengths: {np.mean(lengths):.1f} ± {np.std(lengths):.1f}\n")
-        f.write(
-            f"Position errors: {np.mean(pos_errors):.3f} ± {np.std(pos_errors):.3f} m\n"
-        )
-        f.write(
-            f"Orientation errors: {np.mean(orn_errors):.3f} ± {np.std(orn_errors):.3f}\n"
-        )
-
-    print(f"\nSaved summary to: {summary_file}")
+            time.sleep(0.5)
 
     env.close()
-    print("\nEvaluation complete!")
+
+    mpsf_results = []
+    if args.compare_mpsf:
+        print(
+            f"\n{'='*80}\nMPSF rollouts (same goals, early exit on success, max {max_steps} steps)\n{'='*80}"
+        )
+        import pybullet as pyb
+
+        robot_cfg = config.get("robot", {})
+        ee_max_linear_vel = float(robot_cfg.get("ee_linear_vel_limit", 0.5))
+        ee_max_angular_vel = float(robot_cfg.get("ee_angular_vel_limit", 0.75))
+        mpsf_runtime = create_mpsf_runtime(config)
+        try:
+            for i, (gp, go) in enumerate(goals, 1):
+                mpsf_results.append(
+                    run_mpsf_episode(
+                        mpsf_runtime,
+                        i,
+                        gp,
+                        go,
+                        max_steps,
+                        ee_max_linear_vel=ee_max_linear_vel,
+                        ee_max_angular_vel=ee_max_angular_vel,
+                        use_ik_solver=args.use_ik_solver,
+                    )
+                )
+        finally:
+            pyb.disconnect()
+
+    payload = {
+        "meta": {
+            "timestamp": run_stamp,
+            "config_path": str(args.config),
+            "checkpoint": str(checkpoint_path),
+            "n_episodes": int(args.n_episodes),
+            "seed": args.seed,
+            "goal_seed": int(goal_seed),
+            "compare_mpsf": bool(args.compare_mpsf),
+            "use_ik_solver": bool(args.use_ik_solver),
+            "closed_loop_planner": bool(args.closed_loop_planner),
+            "planner_mode": config.get("planner_mode"),
+            "sim_timestep": float(config["simulation"]["timestep"]),
+        },
+        "goals": [
+            {
+                "goal_pos": np.asarray(gp, dtype=np.float64),
+                "goal_orn": np.asarray(go, dtype=np.float64),
+            }
+            for gp, go in goals
+        ],
+        "rl_episodes": all_rl,
+        "mpsf_episodes": mpsf_results,
+    }
+    pkl_file = output_dir / f"evaluation_data_{run_stamp}.pkl"
+    with open(pkl_file, "wb") as f:
+        pickle.dump(payload, f)
+    print_report(payload, pkl_path=str(pkl_file))
+    print(f"\nSaved evaluation data to: {pkl_file}")
+    print("Use: python3 -m mm_rl.evaluate_experiment --pkl <path>")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
