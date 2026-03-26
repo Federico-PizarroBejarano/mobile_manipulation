@@ -6,18 +6,20 @@ project(mm_run)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED)
 
+catkin_python_setup()
+
 catkin_package()
 
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
-   scripts/experiment.py
-   scripts/mpsf_experiment.py
-   scripts/test_joystick.py
-   nodes/sim_ros.py
-   nodes/isaac_sim_ros.py
-   nodes/mpc_ros.py
-   nodes/mpsf_ros.py
-   nodes/planner_test_ros.py
+   src/mm_run/scripts/experiment.py
+   src/mm_run/scripts/mpsf_experiment.py
+   src/mm_run/scripts/test_joystick.py
+   src/mm_run/nodes/sim_ros.py
+   src/mm_run/nodes/isaac_sim_ros.py
+   src/mm_run/nodes/mpc_ros.py
+   src/mm_run/nodes/mpsf_ros.py
+   src/mm_run/nodes/planner_test_ros.py
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )

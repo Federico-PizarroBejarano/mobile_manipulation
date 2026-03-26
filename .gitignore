@@ -19,3 +19,16 @@ __pycache__/
 
 # Results/output data
 results/
+checkpoints/
+logs/
+
+# Cursor Docs
+docs/
+
+# Python Egg
+*.egg
+*.egg-info/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
