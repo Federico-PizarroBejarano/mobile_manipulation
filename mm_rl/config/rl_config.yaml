@@ -7,6 +7,7 @@ rl:
   update_freq: 1  # Update networks every N steps
   eval_freq: 10000  # Frequency of evaluation episodes
   save_freq: 50000  # Frequency of checkpoint saving
+  learn_vel_norm: true  # If true, policy outputs [vel_norm, base_x, base_y, base_yaw]
 
   sac:
     lr: 1.0e-4  # Learning rate (paper: 1e-4)
@@ -34,7 +35,8 @@ reward:
   pos_scale: 0.1   # Position normalization (m), same as modulation_rl ikslack_dist
   rot_scale: 0.05  # Rotation normalization, same as modulation_rl ikslack_rot_dist
   acceleration_penalty_multiplier: 0.05
-  base_action_penalty_multiplier: 0.05
+  scale_reward_by_vel_norm: true  # modulation_rl-style optional reward scaling by vel_norm/max
+  vel_norm_penalty_multiplier: 0.1  # modulation_rl-style optional slowness penalty
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -67,6 +69,8 @@ ik:
 # Planner parameters
 planner:
   max_linear_speed: 0.08  # m/s; caps mean linear speed along the position segment of the path
+  vel_norm_min: 0.01  # m/s; min learned planner speed when rl.learn_vel_norm=true
+  vel_norm_max: 0.08  # m/s; max learned planner speed when rl.learn_vel_norm=true
 
 # Robot speed override (~modulation_rl: base_vel_rng 0.2 m/s, base_rot_rng 0.75 rad/s)
 robot:

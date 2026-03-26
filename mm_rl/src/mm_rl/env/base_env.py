@@ -29,6 +29,8 @@ class BaseRLEnv(gym.Env):
         # Robot config might be nested under controller.robot
         self.robot_config = config.get("controller").get("robot")
         self.planner_mode = config.get("planner_mode", "open_loop")
+        rl_cfg = config.get("rl", {})
+        self.learn_vel_norm = bool(rl_cfg.get("learn_vel_norm", False))
 
         # Initialize simulation
         timestamp = datetime.now()
@@ -39,12 +41,14 @@ class BaseRLEnv(gym.Env):
         self.nv = self.sim.robot.nv  # Number of joint velocities
         self.nu = self.sim.robot.nu  # Number of inputs
 
-        # Action space: N²M² approach - 3D action space
-        # [base_x, base_y, base_yaw]
+        # Action space:
+        # - default: [base_x, base_y, base_yaw]
+        # - optional (learn_vel_norm): [vel_norm, base_x, base_y, base_yaw]
         # All actions in range [-1, 1], will be scaled appropriately
+        action_dim = 4 if self.learn_vel_norm else 3
         self.action_space = spaces.Box(
-            low=-np.ones(3),
-            high=np.ones(3),
+            low=-np.ones(action_dim),
+            high=np.ones(action_dim),
             dtype=np.float32,
         )
 
@@ -83,6 +87,10 @@ class BaseRLEnv(gym.Env):
 
         planner_config = config.get("planner", {})
         self.planner_max_linear_speed = float(planner_config["max_linear_speed"])
+        self.vel_norm_min = float(planner_config.get("vel_norm_min", 0.01))
+        self.vel_norm_max = float(
+            planner_config.get("vel_norm_max", self.planner_max_linear_speed)
+        )
 
         # End-effector planner (will be initialized in reset)
         self.ee_planner = None
@@ -283,7 +291,7 @@ class BaseRLEnv(gym.Env):
         """Execute one step in the environment.
 
         Args:
-            action: Action vector [base_x, base_y, base_yaw] in [-1, 1]
+            action: Action vector in [-1, 1].
 
         Returns:
             observation, reward, terminated, truncated, info
@@ -291,17 +299,23 @@ class BaseRLEnv(gym.Env):
         # Clip action to action space
         action = np.clip(action, self.action_space.low, self.action_space.high)
 
-        # Convert policy actions to environment actions (unscaled base velocities)
-        base_vel = self._convert_policy_to_env_actions(action)
+        # Convert policy actions to environment commands
+        base_vel, learned_vel_norm, base_action = self._convert_policy_to_env_actions(
+            action
+        )
 
         # Get desired end-effector velocity from planner (teleoperator command)
         if self.planner_mode == "closed_loop":
             ee_pos_now, ee_orn_now = self.sim.robot.link_pose()
             desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step(
-                ee_pos_now, ee_orn_now
+                ee_pos_now,
+                ee_orn_now,
+                linear_speed_override=learned_vel_norm,
             )
         else:
-            desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step()
+            desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step(
+                linear_speed_override=learned_vel_norm
+            )
         desired_ee_vel = np.concatenate([desired_ee_lin_vel, desired_ee_ang_vel])  # 6D
 
         # Store desired velocity for observation
@@ -335,7 +349,10 @@ class BaseRLEnv(gym.Env):
             self.nr_kin_failures += 1
 
         # Compute reward (to be implemented by subclasses)
-        reward = self._compute_reward(action, self.prev_action)
+        prev_base_action = (
+            self.prev_action[1:] if self.learn_vel_norm else self.prev_action
+        )
+        reward = self._compute_reward(base_action, prev_base_action, learned_vel_norm)
         # Store action for next observation (a_{t-1})
         self.prev_action = action.copy()
 
@@ -355,30 +372,41 @@ class BaseRLEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _convert_policy_to_env_actions(self, action):
-        """Convert policy actions from [-1, 1] to actual velocities.
+        """Convert policy actions from [-1, 1] to commands.
 
         Args:
-            action: Policy action [base_x, base_y, base_yaw] in [-1, 1]
+            action: Policy action in [-1, 1]:
+                - without vel_norm: [base_x, base_y, base_yaw]
+                - with vel_norm: [vel_norm, base_x, base_y, base_yaw]
 
         Returns:
-            ndarray: Base velocities [x, y, yaw] (3,)
+            tuple: (base_vel, learned_vel_norm, base_action)
         """
+        if self.learn_vel_norm:
+            learned_vel_norm = self._unscale_action(
+                action[0], self.vel_norm_min, self.vel_norm_max
+            )
+            base_action = action[1:]
+        else:
+            learned_vel_norm = None
+            base_action = action
+
         # Unscale base velocities
         base_vel = np.array(
             [
                 self._unscale_action(
-                    action[0], self.base_input_low[0], self.base_input_high[0]
+                    base_action[0], self.base_input_low[0], self.base_input_high[0]
                 ),
                 self._unscale_action(
-                    action[1], self.base_input_low[1], self.base_input_high[1]
+                    base_action[1], self.base_input_low[1], self.base_input_high[1]
                 ),
                 self._unscale_action(
-                    action[2], self.base_input_low[2], self.base_input_high[2]
+                    base_action[2], self.base_input_low[2], self.base_input_high[2]
                 ),
             ]
         )
 
-        return base_vel
+        return base_vel, learned_vel_norm, base_action
 
     def _unscale_action(self, action, low, high):
         """Unscale action from [-1, 1] to [low, high].
@@ -485,7 +513,7 @@ class BaseRLEnv(gym.Env):
 
         return joint_velocities
 
-    def _compute_reward(self, action, prev_action):
+    def _compute_reward(self, action, prev_action, learned_vel_norm=None):
         """Compute reward. Override in subclasses.
 
         Args:

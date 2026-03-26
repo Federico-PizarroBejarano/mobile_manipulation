@@ -87,7 +87,7 @@ class EEPlanner:
             n_eff += 1
         return n_eff
 
-    def step(self, current_pos=None, current_orn=None):
+    def step(self, current_pos=None, current_orn=None, linear_speed_override=None):
         """Compute desired end-effector velocity.
 
         For open_loop mode, velocities are generated from the internal path
@@ -99,12 +99,19 @@ class EEPlanner:
                 when ``planner_mode == "closed_loop"``.
             current_orn (ndarray, optional): Measured EE quaternion (xyzs); required
                 when ``planner_mode == "closed_loop"``.
+            linear_speed_override (float, optional): Runtime linear speed (m/s) used
+                to scale planner progression (open-loop) or step bound (closed-loop).
 
         Returns:
             tuple: ``(desired_lin_vel, desired_ang_vel)`` in world frame, each shape ``(3,)``.
         """
+        speed_scale = 1.0
+        if linear_speed_override is not None:
+            speed_scale = float(linear_speed_override) / (self.max_linear_speed + 1e-12)
+            speed_scale = float(np.clip(speed_scale, 1e-4, 1.0))
+
         if self.planner_mode == "closed_loop":
-            return self._step_closed_loop(current_pos, current_orn)
+            return self._step_closed_loop(current_pos, current_orn, speed_scale)
 
         if self.s >= 1.0 - 1e-12:
             self.s = 1.0
@@ -113,7 +120,7 @@ class EEPlanner:
             return np.zeros(3), np.zeros(3)
 
         s_prev = self.s
-        self.s = min(self.s + self.delta_s, 1.0)
+        self.s = min(self.s + speed_scale * self.delta_s, 1.0)
 
         pos_prev, orn_prev = self._path_pose(s_prev)
         pos_new, orn_new = self._path_pose(self.s)
@@ -126,7 +133,7 @@ class EEPlanner:
 
         return v_lin, v_ang
 
-    def _step_closed_loop(self, current_pos, current_orn):
+    def _step_closed_loop(self, current_pos, current_orn, speed_scale):
         """Advance desired pose toward the goal using measured EE pose (closed-loop).
 
         Args:
@@ -145,7 +152,7 @@ class EEPlanner:
         orn_curr = quat_normalize(current_orn)
         pos_err = self._goal_pos - pos_curr
         dist = float(np.linalg.norm(pos_err))
-        max_step = self.max_linear_speed * self.dt
+        max_step = self.max_linear_speed * speed_scale * self.dt
 
         if dist <= 1e-12:
             pos_new = self._goal_pos.copy()

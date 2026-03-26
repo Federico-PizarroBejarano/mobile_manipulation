@@ -36,8 +36,11 @@ class SimpleGoalEnv(BaseRLEnv):
         self.acceleration_penalty_multiplier = self.reward_config.get(
             "acceleration_penalty_multiplier"
         )
-        self.base_action_penalty_multiplier = self.reward_config.get(
-            "base_action_penalty_multiplier", 0.0
+        self.scale_reward_by_vel_norm = bool(
+            self.reward_config.get("scale_reward_by_vel_norm", False)
+        )
+        self.vel_norm_penalty_multiplier = float(
+            self.reward_config.get("vel_norm_penalty_multiplier", 0.0)
         )
 
         # Initialize goal
@@ -98,7 +101,7 @@ class SimpleGoalEnv(BaseRLEnv):
             ]
         )
 
-    def _compute_reward(self, action, prev_action):
+    def _compute_reward(self, action, prev_action, learned_vel_norm=None):
         """Compute reward based on goal distance, IK quality, and action penalties.
 
         Args:
@@ -137,7 +140,10 @@ class SimpleGoalEnv(BaseRLEnv):
             pos_scale=self.pos_scale,
             rot_scale=self.rot_scale,
             acceleration_penalty_multiplier=self.acceleration_penalty_multiplier,
-            base_action_penalty_multiplier=self.base_action_penalty_multiplier,
+            vel_norm=learned_vel_norm,
+            vel_norm_max=self.vel_norm_max,
+            scale_reward_by_vel_norm=self.scale_reward_by_vel_norm,
+            vel_norm_penalty_multiplier=self.vel_norm_penalty_multiplier,
         )
 
         return reward

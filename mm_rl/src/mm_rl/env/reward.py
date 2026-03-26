@@ -71,7 +71,10 @@ def compute_total_reward(
     pos_scale=0.1,
     rot_scale=0.05,
     acceleration_penalty_multiplier=0.01,
-    base_action_penalty_multiplier=0.0,
+    vel_norm=None,
+    vel_norm_max=None,
+    scale_reward_by_vel_norm=False,
+    vel_norm_penalty_multiplier=0.0,
 ):
     """Compute total reward for a step.
 
@@ -89,7 +92,10 @@ def compute_total_reward(
         pos_scale: Scale for position error
         rot_scale: Scale for rotation error
         acceleration_penalty_multiplier: Multiplier for acceleration penalty (λ_acc in paper)
-        base_action_penalty_multiplier: Multiplier for base action penalty (λ_base in paper)
+        vel_norm: Optional learned planner speed (m/s).
+        vel_norm_max: Maximum learned planner speed for normalization.
+        scale_reward_by_vel_norm: If True, scale total reward by vel_norm / vel_norm_max.
+        vel_norm_penalty_multiplier: Optional slowness penalty multiplier.
 
     Returns:
         float: Total reward
@@ -110,8 +116,14 @@ def compute_total_reward(
         action, prev_action, acceleration_penalty_multiplier
     )
 
-    base_action_penalty_val = -base_action_penalty_multiplier * np.sum(
-        np.square(action)
-    )
+    if scale_reward_by_vel_norm:
+        vel_ratio = float(np.clip(vel_norm / vel_norm_max, 0.0, 1.0))
+        total_reward = vel_ratio * ik_reward_val + acceleration_penalty_val
+    else:
+        total_reward = ik_reward_val + acceleration_penalty_val
 
-    return ik_reward_val + acceleration_penalty_val + base_action_penalty_val
+    if vel_norm is not None:
+        vel_ratio = float(np.clip(vel_norm / vel_norm_max, 0.0, 1.0))
+        total_reward -= vel_norm_penalty_multiplier * ((1.0 - vel_ratio) ** 2)
+
+    return total_reward
