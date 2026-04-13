@@ -7,7 +7,7 @@ from scipy.interpolate import interp1d
 
 from mm_control.MPCBase import MPCBase
 from mm_control.MPCCostFunctions import CostFunctionRegistry
-from mm_utils.math import wrap_pi_array
+from mm_utils.math import wrap_pi_scalar
 from mm_utils.parsing import parse_ros_path
 
 
@@ -82,6 +82,8 @@ class MPC(MPCBase):
                 costs.append(self.collisionSoftCsts[name])
             else:
                 constraints.append(self.collisionCsts[name])
+        if self.alignedCst is not None:
+            constraints.append(self.alignedCst)
 
         name = self.params["acados"].get("name", "MM")
         self.ocp, self.ocp_solver, self.p_struct = self._construct(
@@ -234,7 +236,11 @@ class MPC(MPCBase):
         """
         self.curr_control_time = t
         q, v = robot_states
-        q[2:9] = wrap_pi_array(q[2:9])
+        # Only base yaw is periodic; arm joints must stay consistent with the simulator
+        # (continuous coordinates). Do not wrap q[3:] or MPC FK/constraints desync from PyBullet.
+        q = np.asarray(q, dtype=np.float64).copy()
+        v = np.asarray(v, dtype=np.float64).copy()
+        q[2] = wrap_pi_scalar(float(q[2]))
         xo = np.hstack((q, v))
 
         # Merge desired_velocity with planner velocity if MPSF masks are set
@@ -619,6 +625,10 @@ class MPC(MPCBase):
             self.log["_".join([name, "constraint"])] = self.evaluate_constraints(
                 self.collisionCsts[name], self.x_bar, self.u_bar, curr_p_map_bar
             )
+        if self.alignedCst is not None:
+            self.log["aligned_constraint"] = self.evaluate_constraints(
+                self.alignedCst, self.x_bar, self.u_bar, curr_p_map_bar
+            )
 
         self.log["ee_pos"] = self.ee_bar.copy()
         self.log["base_pos"] = self.base_bar.copy()
@@ -628,7 +638,7 @@ class MPC(MPCBase):
         t2 = time.perf_counter()
         self.log["time_ocp_overhead"] = t2 - t1
 
-    def _get_log(self):
+    def _get_log_struct(self):
         """Get log dictionary structure with default keys.
 
         Returns:
@@ -658,6 +668,8 @@ class MPC(MPCBase):
         for name in self.collision_link_names:
             log["_".join([name, "constraint"])] = 0
             log["_".join([name, "constraint", "gradient"])] = 0
+        if self.alignedCst is not None:
+            log["aligned_constraint"] = 0
 
         return log
 

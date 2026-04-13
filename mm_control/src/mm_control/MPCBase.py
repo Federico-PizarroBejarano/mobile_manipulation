@@ -1,4 +1,5 @@
 import logging
+import os
 from abc import abstractmethod
 from pathlib import Path
 from typing import Tuple
@@ -63,6 +64,8 @@ class MPCBase:
                 name, sd_cst
             )
 
+        self.alignedCst = self._create_aligned_constraint()
+
         self.stateCst = StateBoxConstraints(self.robot)
         self.controlCst = ControlBoxConstraints(self.robot)
 
@@ -78,7 +81,7 @@ class MPCBase:
         self.v_cmd = np.zeros(self.nx - self.DoF)
 
         self.py_logger = logging.getLogger("Controller")
-        self.log = self._get_log()
+        self.log = self._get_log_struct()
 
         self.ree_bar = None
         self.rbase_bar = None
@@ -471,14 +474,17 @@ class MPCBase:
         """
         json_file_name = str(self.output_dir / f"acados_ocp_{name}.json")
         if self.params["acados"]["cython"]["enabled"]:
-            if self.params["acados"]["cython"]["recompile"]:
+            recompile = self.params["acados"]["cython"]["recompile"]
+            # Older acados_template (e.g. 0.5.2) does not auto-regenerate when
+            # generate=False and build=False; it opens json immediately. If the
+            # json is missing (fresh name, cleaned acados_outputs), force generate.
+            if recompile or not os.path.isfile(json_file_name):
                 AcadosOcpSolver.generate(ocp, json_file=json_file_name)
                 AcadosOcpSolver.build(ocp.code_export_directory, with_cython=True)
                 return AcadosOcpSolver.create_cython_solver(json_file_name)
-            else:
-                return AcadosOcpSolver(
-                    ocp, json_file=json_file_name, build=False, generate=False
-                )
+            return AcadosOcpSolver(
+                ocp, json_file=json_file_name, build=False, generate=False
+            )
         else:
             return AcadosOcpSolver(ocp, json_file=json_file_name, build=True)
 
@@ -534,6 +540,24 @@ class MPCBase:
             mu, zeta, sd_cst, name + "CollisionSoftCst", expand=expand
         )
 
+    def _create_aligned_constraint(self):
+        """Create aligned balancing constraint when enabled in config.
+
+        Returns:
+            MPCConstraints.AlignedToolConstraint: Aligned balancing constraint.
+        """
+        upright_cfg = self.params.get("upright", {})
+        if not upright_cfg.get("enabled", False):
+            return None
+
+        eps_align = upright_cfg.get("eps_align", 1e-3)
+
+        return MPCConstraints.AlignedToolConstraint(
+            self.robot,
+            eps_align=eps_align,
+            name="aligned",
+        )
+
     def _setup_slack_variables(self, ocp, nsx, nsu, nsh, nsx_e, nsh_e, nsh_0):
         """Setup slack variables for the OCP.
 
@@ -570,7 +594,7 @@ class MPCBase:
             ocp.cost.zl_0 = np.ones(ns_0) * z
             ocp.cost.zu_0 = np.ones(ns_0) * z
 
-    def _get_log(self):
+    def _get_log_struct(self):
         """Get empty log dictionary structure.
 
         Returns:

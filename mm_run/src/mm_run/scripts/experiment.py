@@ -122,6 +122,7 @@ def main():
 
     sot.activatePlanners()
     u = np.zeros(sim_config["robot"]["dims"]["v"])
+    controller_run_time = 0.0
 
     # Controller frequency management
     ctrl_period = 1.0 / ctrl_config.get("ctrl_rate")
@@ -143,7 +144,8 @@ def main():
             t0 = time.perf_counter()
             v_bar, u_bar = controller.control(t, robot_states, references)
             t1 = time.perf_counter()
-            controller_log.log(20, f"Controller Run Time: {t1 - t0}")
+            controller_run_time = t1 - t0
+            controller_log.log(20, f"Controller Run Time: {controller_run_time}")
             last_controller_time = t
 
         u = compute_velocity_command(
@@ -192,7 +194,7 @@ def main():
 
         logger.append("ts", t)
         logger.append("xs", np.hstack(robot_states))
-        logger.append("controller_run_time", t1 - t0)
+        logger.append("controller_run_time", controller_run_time)
         logger.append("cmd_vels", u)
         logger.append("r_ew_ws", states["EE"]["pose"][:3])
         # Convert Euler angles back to quaternion for logging

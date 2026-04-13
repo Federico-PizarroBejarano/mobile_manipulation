@@ -31,6 +31,11 @@ controller:
     self: 0.10
     static_obstacles: 0.10
 
+  # Payload balancing (aligned acceleration constraint, MPC-only); link/up/g fixed in code
+  upright:
+    enabled: False
+    eps_align: 1e-3
+
   # Soft constraints parameters
   xu_soft:
     mu: 0.001

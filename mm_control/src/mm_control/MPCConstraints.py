@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import casadi as cs
+import numpy as np
 
 from mm_utils.casadi_struct import casadi_sym_struct
 
@@ -200,3 +201,62 @@ class ControlBoxConstraints(NonlinearConstraint):
         self.g_fcn = cs.Function(
             "g_" + self.name, [self.x_sym, self.u_sym, self.p_sym], [self.g_eqn]
         )
+
+
+class AlignedToolConstraint(NonlinearConstraint):
+    """Uses robot tool link, world +z up, and g = 9.81 m/s² (fixed for this stack)."""
+
+    _WORLD_UP = np.array([0.0, 0.0, 1.0], dtype=float)
+    _GRAVITY_MAG = 9.81
+
+    def __init__(
+        self,
+        robot_mdl,
+        eps_align=1e-3,
+        name="aligned",
+    ):
+        """Acceleration-alignment constraint for payload balancing.
+
+        State model uses vdot = u (generalized acceleration). Approximate linear
+        acceleration of the tool origin: a_tool_world ≈ J_pos(q) @ u, omitting Jdot*qdot.
+
+        Let z_tool be the tool-frame +z axis in world frame. With fixed unit up +Z,
+        g_vec = -_GRAVITY_MAG * _WORLD_UP. Define a_eff = a_tool_world - g_vec. Enforce
+        (slack may soften): ||cross(z_tool, a_eff)||^2 - eps_align <= 0.
+
+        Tool link is robot_mdl.tool_link_name (URDF tool frame).
+
+        Args:
+            robot_mdl (MobileManipulator3D): Robot model.
+            eps_align (float): Squared cross-norm tolerance (softened if slack on h).
+            name (str): Name of this constraint.
+        """
+        nx = robot_mdl.ssSymMdl["nx"]
+        nu = robot_mdl.ssSymMdl["nu"]
+        nq = robot_mdl.q_sym.size()[0]
+        ng = 1
+        p_dict = {}
+        super().__init__(nx, nu, ng, None, p_dict, name)
+
+        tool_name = robot_mdl.tool_link_name
+        fk_tool = robot_mdl.kinSymMdls[tool_name]
+        _, C_world_tool = fk_tool(self.x_sym[:nq])
+        J_pos_fcn = robot_mdl.jacSymMdls[tool_name]
+
+        q = self.x_sym[:nq]
+        qdd = self.u_sym
+
+        J_pos = J_pos_fcn(q)
+        # NOTE: differentiating through compiled FK/Jacobian functions can fail for
+        # MX symbolic purity constraints in CasADi. Use first-order approximation.
+        a_tool_world = J_pos @ qdd
+        g_vec = -float(self._GRAVITY_MAG) * cs.DM(self._WORLD_UP)
+        a_eff = a_tool_world - g_vec
+
+        z_tool_world = C_world_tool @ cs.DM([0.0, 0.0, 1.0])
+        g_cross = cs.sumsqr(cs.cross(z_tool_world, a_eff)) - float(eps_align)
+        self.g_eqn = cs.vertcat(g_cross)
+        self.g_fcn = cs.Function(
+            "g_" + self.name, [self.x_sym, self.u_sym, self.p_sym], [self.g_eqn]
+        )
+        self.slack_enabled = True

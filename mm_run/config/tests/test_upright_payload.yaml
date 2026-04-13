@@ -1,0 +1,36 @@
+planner:
+  tasks:
+    - name: EEMoveWhileBalanced
+      planner_type: WaypointPlanner
+      ee_pose: [2.55, 0.4, 1.05, 0.0, 0.0, 0.0]
+      tracking_pos_err_tol: 0.08
+
+controller:
+  base_mask: [false, false, false]
+  ee_mask: [true, true, true, false, false, false]
+  self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: True
+  upright:
+    enabled: True
+    eps_align: 1e-6
+  acados:
+    name: "TestAlignedPayload"
+
+simulation:
+  duration: 4
+  robot:
+    home: [0.062, -0.053, -0.04, 1.742, -0.321, 1.007, -2.245, 1.593, 4.278]
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"
+  - package: "mm_run"
+    path: "config/sim/simulation.yaml"
+  - package: "mm_run"
+    path: "config/scene/empty.yaml"
+
+logging:
+  log_dir: "test_experiments/upright_payload"
+  log_level: 10
