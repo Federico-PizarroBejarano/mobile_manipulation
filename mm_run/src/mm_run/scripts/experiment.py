@@ -89,6 +89,7 @@ def main():
         config=sim_config, timestamp=timestamp, cli_args=args
     )
     robot = sim.robot
+    cargo_cfg = sim_config.get("cargo_box", {})
 
     # Task Manager (simplified - only sequential execution)
     sot = TaskManager(planner_config)
@@ -130,6 +131,7 @@ def main():
 
     t = 0.0
     while t <= sim.duration:
+        loop_wall_t0 = time.perf_counter()
         print(f"-------------- {t:.3f}s/{sim.duration}s ------------------")
         # open-loop command
         robot_states = robot.joint_states(add_noise=False)
@@ -163,6 +165,13 @@ def main():
 
         # Extract robot states using shared utility function
         states = extract_robot_states(robot, robot_states)
+
+        # Tray tilt: angle between tool +Z (tray normal) and world +Z; 0° = flat horizontal.
+        _, Q_wt_tray = robot.link_pose()
+        z_tool_w = Rot.from_quat(Q_wt_tray).as_matrix()[:, 2]
+        c = float(np.clip(np.dot(z_tool_w, np.array([0.0, 0.0, 1.0])), -1.0, 1.0))
+        tray_tilt_deg = float(np.rad2deg(np.arccos(c)))
+        print(f"tray_tilt_from_horizontal_deg = {tray_tilt_deg:.6f}")
 
         # Pass MPC masks to TaskManager for task completion checks
         sot.update(
@@ -224,6 +233,28 @@ def main():
         if "MPC" in ctrl_config["type"]:
             for key, val in controller.log.items():
                 logger.append("_".join(["mpc", key]) + "s", val)
+
+        cargo_state = sim.cargo_box_state()
+        if cargo_state is not None:
+            logger.append("cargo_box_r_ws", cargo_state["position"])
+            logger.append("cargo_box_Q_wbs", cargo_state["orientation"])
+            logger.append("cargo_box_v_ws", cargo_state["linear_velocity"])
+            logger.append("cargo_box_ω_ws", cargo_state["angular_velocity"])
+
+            r_tool_w, Q_wt = robot.link_pose()
+            C_wt = Rot.from_quat(Q_wt).as_matrix()
+            z_tool_w = C_wt[:, 2]
+            rel_z_tool = float(np.dot(cargo_state["position"] - r_tool_w, z_tool_w))
+            logger.append("cargo_box_rel_z_tools", rel_z_tool)
+
+            fall_thresh = float(cargo_cfg.get("fell_rel_z_tool_threshold", -0.03))
+            logger.append("cargo_box_fell_flags", float(rel_z_tool < fall_thresh))
+
+        if sim_config.get("gui", False):
+            loop_wall_elapsed = time.perf_counter() - loop_wall_t0
+            sleep_s = max(0.0, sim.timestep - loop_wall_elapsed)
+            if sleep_s > 0.0:
+                time.sleep(sleep_s)
 
     session_timestamp = timestamp.strftime("%Y-%m-%d_%H-%M-%S")
     logger.save(session_timestamp=session_timestamp)

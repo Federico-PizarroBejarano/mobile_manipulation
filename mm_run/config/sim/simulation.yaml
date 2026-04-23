@@ -3,6 +3,14 @@ simulation:
   duration: 25.
   gravity: [0, 0, -9.81]
 
+  # PyBullet steps per macro step; each substep reapplies velocity from MPC (see configuration.md).
+  control_micro_steps: 1
+
+  # Per stepSimulation(): internal substeps + solver iters (contact stability, less tunneling).
+  physics:
+    num_sub_steps: 4
+    num_solver_iterations: 120
+
   robot:
     home: [0.0, 0.0, 0, 1.5708, -0.7854,  1.5708, -0.7854,  1.5708, 1.3100] # default
     tool_vicon_name: ThingContainer
@@ -14,6 +22,16 @@ simulation:
 
   dynamic_obstacles:
     enabled: False
+
+  cargo_box:
+    enabled: false
+    mass: 0.5
+    mu: 0.05
+    tray_mu: 1.0
+    side_lengths: [0.12, 0.12, 0.15]
+    spawn_offset: [0.0, 0.0, 0.12]
+    fell_rel_z_tool_threshold: -0.03
+    color: [0.9, 0.2, 0.2, 1.0]
 
 include:
   - package: "mm_run"

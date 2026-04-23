@@ -6,6 +6,12 @@ planner:
       tracking_pos_err_tol: 0.08
 
 controller:
+  # Match simulation timestep (0.03 s in config/sim/simulation.yaml): finer MPC grid + one solve per sim step.
+  dt: 0.03
+  prediction_horizon: 1.0
+  ctrl_rate: 33.333333333333336
+  robot:
+    time_discretization_dt: 0.03
   base_mask: [false, false, false]
   ee_mask: [true, true, true, false, false, false]
   self_collision_avoidance_enabled: True
@@ -19,7 +25,27 @@ controller:
 simulation:
   duration: 4
   robot:
-    home: [0.062, -0.053, -0.04, 1.742, -0.321, 1.007, -2.245, 1.593, 4.278]
+    home: [0.06492914, -0.05419276, -0.04503236,  1.74097135, -0.31314123,
+        0.99901806, -2.25675201,  1.5668383 ,  2.82451102]
+    urdf:
+      includes:
+        - "$(find mobile_manipulation_central)/urdf/xacro/cartesian_base_joints.urdf.xacro"
+        - "$(find mobile_manipulation_central)/urdf/xacro/thing_no_wheels.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/end_effector_tray_gripped.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/arm_coverage.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/cameras.urdf.xacro"
+  cargo_box:
+    enabled: true
+    mass: 0.5
+    mu: 0.25
+    tray_mu: 0.5
+    side_lengths: [0.12, 0.12, 0.15]
+    spawn_offset: [0.0, 0.0, 0.12]
+    fell_rel_z_tool_threshold: -0.03
+    color: [0.9, 0.2, 0.2, 1.0]
+  physics:
+    num_sub_steps: 4
+    num_solver_iterations: 120
 
 include:
   - package: "mm_run"

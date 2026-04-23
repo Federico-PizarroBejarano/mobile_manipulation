@@ -56,7 +56,7 @@ class MPC(MPCBase):
         # Control effort (always included)
         costs.append(
             CostFunctionRegistry.create(
-                "ControlEffort", self.robot, cost_params.get("Effort", {})
+                "ControlEffort", self.robot, cost_params.get("ControlEffort", {})
             )
         )
 
@@ -171,7 +171,7 @@ class MPC(MPCBase):
             self._velocity_ee_mask = self.ee_mask.copy()
 
         # Pre-compute control effort params (constant)
-        effort_params = self.params["cost_params"]["Effort"]
+        effort_params = self.params["cost_params"]["ControlEffort"]
         self._control_effort_param_names = [
             f"{param_name}_ControlEffort"
             for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]

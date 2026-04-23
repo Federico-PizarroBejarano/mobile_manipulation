@@ -9,7 +9,7 @@ controller:
   prediction_horizon: 1.0
   ctrl_rate: 10 #hz
   cmd_vel_pub_rate: 100 # hz
-  cmd_vel_type: "interpolation"         # integration: publish vel by integrating from acc_bar
+  cmd_vel_type: "integration"         # integration: publish vel by integrating from acc_bar
                                         # interpolation: publish vel by interpolating vel_bar
   soft_cst: True
   self_collision_avoidance_enabled: True
@@ -70,7 +70,7 @@ controller:
       Qk: [1, 1, 1]  # [vx, vy, vyaw] - set vyaw weight to 0 to disable yaw velocity tracking
       P: [1, 1, 1]    # Terminal weights [vx, vy, vyaw]
     # Control effort cost (always included)
-    Effort:
+    ControlEffort:
       Qqa: [0, 0, 0, 0, 0, 0]
       Qqb: [0, 0, 0]
       Qva: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]

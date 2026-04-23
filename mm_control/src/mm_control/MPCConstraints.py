@@ -259,4 +259,4 @@ class AlignedToolConstraint(NonlinearConstraint):
         self.g_fcn = cs.Function(
             "g_" + self.name, [self.x_sym, self.u_sym, self.p_sym], [self.g_eqn]
         )
-        self.slack_enabled = True
+        self.slack_enabled = False

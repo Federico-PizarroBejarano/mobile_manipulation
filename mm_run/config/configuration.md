@@ -106,6 +106,15 @@ controller:
   cmd_vel_type: "interpolation"   # "integration" or "interpolation"
 ```
 
+### Payload upright (optional)
+
+```yaml
+controller:
+  upright:
+    enabled: bool                 # MPC constraint: keep payload acceleration aligned with gravity
+    eps_align: float              # Numerical tolerance for alignment
+```
+
 ### Collision Avoidance
 
 ```yaml
@@ -285,10 +294,15 @@ controller:
 
 ```yaml
 simulation:
-  timestep: 0.03                  # Simulation timestep [s]
+  timestep: 0.03                  # Macro simulation step [s] (one outer loop iteration)
   duration: 25.0                  # Duration [s]
   gravity: [0, 0, -9.81]          # Gravity [m/s²]
   gui: bool                       # Show PyBullet GUI
+  control_micro_steps: int         # Split each macro step into this many PyBullet steps (default 1).
+                                   # Each substep refreshes velocity command; use with cmd_vel_type integration
+  physics:                        # PyBullet engine parameters
+    num_sub_steps: int            # Internal substeps per stepSimulation() call (default 8 in shared sim yaml)
+    num_solver_iterations: int    # Contact constraint solver iterations (default 120)
 ```
 
 ### Robot Configuration
@@ -347,6 +361,21 @@ simulation:
 simulation:
   dynamic_obstacles:
     enabled: bool
+```
+
+### Cargo Box (optional loose payload)
+
+```yaml
+simulation:
+  cargo_box:
+    enabled: bool
+    mass: float
+    mu: float
+    side_lengths: [sx, sy, sz]           # Full cuboid lengths [m]
+    spawn_offset: [ox, oy, oz]           # Tool-frame offset from tray center [m]
+    tray_mu: float                       # Lateral friction set on tool link
+    fell_rel_z_tool_threshold: float     # "Fell" if box relative z_tool is below this
+    color: [r, g, b, a]                  # RGBA in [0, 1]
 ```
 
 ### Cameras (Isaac Sim)

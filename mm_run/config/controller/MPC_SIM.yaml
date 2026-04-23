@@ -43,7 +43,7 @@ controller:
       P: [1.0, 1.0, 1.0]
 
     # Control effort
-    Effort:
+    ControlEffort:
       Qqa: 0.0
       Qqb: 0.0
       Qva: 0.01

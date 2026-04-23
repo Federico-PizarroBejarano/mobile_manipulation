@@ -467,6 +467,15 @@ class BulletSimulation:
         pyb.setGravity(*config["gravity"])
         pyb.setTimeStep(self.timestep)
 
+        phys = config.get("physics", {})
+        num_sub = int(phys.get("num_sub_steps", 4))
+        num_sol = int(phys.get("num_solver_iterations", 120))
+        if num_sub > 1 or num_sol > 0:
+            pyb.setPhysicsEngineParameter(
+                numSubSteps=max(1, num_sub),
+                numSolverIterations=max(10, num_sol),
+            )
+
         pyb.resetDebugVisualizerCamera(
             cameraDistance=4,
             cameraYaw=42,
@@ -484,6 +493,11 @@ class BulletSimulation:
         # setup robot
         self.robot = SimulatedRobot(config)
         self.robot.reset_joint_configuration(self.robot.home)
+        self.cargo_box = None
+        self.cargo_box_cfg = self.config.get("cargo_box", {"enabled": False})
+
+        if self.cargo_box_cfg.get("enabled", False):
+            self._spawn_cargo_box()
 
         # setup obstacles
         if config["static_obstacles"]["enabled"]:
@@ -521,6 +535,35 @@ class BulletSimulation:
 
         # used to change color when object goes non-statically stable
         self.static_stable = True
+
+    def _spawn_cargo_box(self):
+        """Spawn a loose cuboid box above the tool frame."""
+        mass = float(self.cargo_box_cfg.get("mass", 0.5))
+        mu = float(self.cargo_box_cfg.get("mu", 0.05))
+        side_lengths = np.asarray(
+            self.cargo_box_cfg.get("side_lengths", [0.12, 0.12, 0.15]), dtype=float
+        )
+        spawn_offset = np.asarray(
+            self.cargo_box_cfg.get("spawn_offset", [0.0, 0.0, 0.12]), dtype=float
+        )
+        color = tuple(self.cargo_box_cfg.get("color", [0.9, 0.2, 0.2, 1.0]))
+
+        r_tool_w, Q_wt = self.robot.link_pose()
+        C_wt = math.quat_to_rot(Q_wt)
+        r_box_w = r_tool_w + C_wt @ spawn_offset
+
+        self.cargo_box = BulletBody.cuboid(
+            mass=mass,
+            mu=mu,
+            side_lengths=side_lengths,
+            orientation=Q_wt,
+            color=color,
+        )
+        self.cargo_box.r0 = r_box_w
+        self.cargo_box.add_to_sim()
+
+        tray_mu = float(self.cargo_box_cfg.get("tray_mu", 1.0))
+        pyb.changeDynamics(self.robot.uid, self.robot.tool_idx, lateralFriction=tray_mu)
 
     def settle(self, duration):
         """Run simulation while doing nothing.
@@ -561,6 +604,19 @@ class BulletSimulation:
             x = np.concatenate((r, v, a))
             xs.append(x)
         return np.concatenate(xs)
+
+    def cargo_box_state(self):
+        """Get pose and velocity of cargo box if enabled."""
+        if self.cargo_box is None:
+            return None
+        r_box_w, Q_wb = self.cargo_box.get_pose()
+        v_box_w, ω_box_w = self.cargo_box.get_velocity()
+        return {
+            "position": r_box_w,
+            "orientation": Q_wb,
+            "linear_velocity": v_box_w,
+            "angular_velocity": ω_box_w,
+        }
 
     def step(self, t):
         """Step the simulation forward one timestep.

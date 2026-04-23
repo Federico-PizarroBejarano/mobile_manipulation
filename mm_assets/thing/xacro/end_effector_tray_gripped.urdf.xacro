@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="end_effector_tray_gripped" xmlns:xacro="http://wiki.ros.org/xacro">
+  <joint name="gripped_object_joint" type="fixed">
+    <xacro:transformed_origin name="gripped_object_transform" />
+    <parent link="gripper"/>
+    <child link="gripped_object"/>
+  </joint>
+
+  <link name="gripped_object">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 -0.01"/>
+      <geometry>
+        <cylinder length="0.02" radius="0.16"/>
+      </geometry>
+      <material name="tray_black">
+        <color rgba="0.05 0.05 0.05 1"/>
+      </material>
+    </visual>
+
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 -0.01"/>
+      <geometry>
+        <cylinder length="0.02" radius="0.16"/>
+      </geometry>
+    </collision>
+
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+    </inertial>
+  </link>
+</robot>
