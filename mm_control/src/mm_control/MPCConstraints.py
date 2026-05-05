@@ -204,7 +204,7 @@ class ControlBoxConstraints(NonlinearConstraint):
 
 
 class AlignedToolConstraint(NonlinearConstraint):
-    """Uses robot tool link, world +z up, and g = 9.81 m/s² (fixed for this stack)."""
+    """Tool-acceleration alignment constraint."""
 
     _WORLD_UP = np.array([0.0, 0.0, 1.0], dtype=float)
     _GRAVITY_MAG = 9.81
@@ -215,48 +215,62 @@ class AlignedToolConstraint(NonlinearConstraint):
         eps_align=1e-3,
         name="aligned",
     ):
-        """Acceleration-alignment constraint for payload balancing.
-
-        State model uses vdot = u (generalized acceleration). Approximate linear
-        acceleration of the tool origin: a_tool_world ≈ J_pos(q) @ u, omitting Jdot*qdot.
-
-        Let z_tool be the tool-frame +z axis in world frame. With fixed unit up +Z,
-        g_vec = -_GRAVITY_MAG * _WORLD_UP. Define a_eff = a_tool_world - g_vec. Enforce
-        (slack may soften): ||cross(z_tool, a_eff)||^2 - eps_align <= 0.
-
-        Tool link is robot_mdl.tool_link_name (URDF tool frame).
+        """Enforce ``|cross(z_tool, f_dir)_i| <= eps_align`` and ``dot(z_tool, f_dir) >= 0``.
 
         Args:
             robot_mdl (MobileManipulator3D): Robot model.
-            eps_align (float): Squared cross-norm tolerance (softened if slack on h).
-            name (str): Name of this constraint.
+            eps_align (float): Component-wise tolerance for normalized cross terms.
+            name (str): Constraint name.
         """
         nx = robot_mdl.ssSymMdl["nx"]
         nu = robot_mdl.ssSymMdl["nu"]
-        nq = robot_mdl.q_sym.size()[0]
-        ng = 1
+        nq = int(robot_mdl.q_sym.size1())
+        ng = 7
         p_dict = {}
         super().__init__(nx, nu, ng, None, p_dict, name)
 
         tool_name = robot_mdl.tool_link_name
         fk_tool = robot_mdl.kinSymMdls[tool_name]
         _, C_world_tool = fk_tool(self.x_sym[:nq])
-        J_pos_fcn = robot_mdl.jacSymMdls[tool_name]
 
-        q = self.x_sym[:nq]
-        qdd = self.u_sym
-
-        J_pos = J_pos_fcn(q)
-        # NOTE: differentiating through compiled FK/Jacobian functions can fail for
-        # MX symbolic purity constraints in CasADi. Use first-order approximation.
-        a_tool_world = J_pos @ qdd
+        a_tool_world, _, _ = tool_origin_linear_accel_world_expr(
+            robot_mdl, self.x_sym, self.u_sym
+        )
         g_vec = -float(self._GRAVITY_MAG) * cs.DM(self._WORLD_UP)
         a_eff = a_tool_world - g_vec
 
         z_tool_world = C_world_tool @ cs.DM([0.0, 0.0, 1.0])
-        g_cross = cs.sumsqr(cs.cross(z_tool_world, a_eff)) - float(eps_align)
-        self.g_eqn = cs.vertcat(g_cross)
+        f_dir = a_eff / (cs.norm_2(a_eff) + float(1e-6))
+        cross_vec = cs.cross(z_tool_world, f_dir)
+        dot_val = cs.dot(z_tool_world, f_dir)
+        tol = float(eps_align)
+        self.g_eqn = cs.vertcat(cross_vec - tol, -cross_vec - tol, -dot_val)
         self.g_fcn = cs.Function(
             "g_" + self.name, [self.x_sym, self.u_sym, self.p_sym], [self.g_eqn]
         )
-        self.slack_enabled = False
+        self.slack_enabled = True
+
+
+def tool_origin_linear_accel_world_expr(robot_mdl, x_sym, u_sym):
+    """Tool linear acceleration from first-order kinematics: ``a_tool = J(q) qdd``.
+
+    Args:
+        robot_mdl: ``MobileManipulator3D`` instance.
+        x_sym (cs.MX): MPC state, shape ``(nx,)``.
+        u_sym (cs.MX): MPC input (generalized acceleration), shape ``(nu,)``.
+
+    Returns:
+        tuple[cs.MX, cs.MX, cs.MX]: ``(a_tool_world, J_pos, jdot_qdot)``.
+    """
+    nq = int(robot_mdl.q_sym.size1())
+    q_live = x_sym[:nq]
+    qdd = u_sym
+    q_alg = cs.MX.sym("q_alg", nq)
+    fk_tool = robot_mdl.kinSymMdls[robot_mdl.tool_link_name]
+    p_tool, _ = fk_tool(q_alg)
+    J_pos = cs.jacobian(p_tool, q_alg)
+    jdot_qdot = cs.DM.zeros(3, 1)
+    a_tool_world = cs.mtimes(J_pos, qdd)
+    a_tool_world = cs.substitute(a_tool_world, q_alg, q_live)
+    J_pos = cs.substitute(J_pos, q_alg, q_live)
+    return a_tool_world, J_pos, jdot_qdot

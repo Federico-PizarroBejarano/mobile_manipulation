@@ -21,6 +21,8 @@ controller:
     eps_align: 1e-6
   acados:
     name: "TestAlignedPayload"
+    cython:
+      recompile: false
 
 simulation:
   duration: 4
