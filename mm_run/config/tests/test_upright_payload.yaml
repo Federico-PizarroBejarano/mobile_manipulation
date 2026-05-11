@@ -23,6 +23,8 @@ controller:
     name: "TestAlignedPayload"
     cython:
       recompile: false
+    ocp_solver_options:
+      qp_solver_iter_max: 40
 
 simulation:
   duration: 4
