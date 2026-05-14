@@ -24,6 +24,9 @@ class MPSFControllerROSNode(ControllerROSNode):
     Inherits from ControllerROSNode and adds MPSF-specific functionality:
     - Calculates desired velocities from MPSF goals
     - Adds desired velocities to controller references
+
+    Uses the same split ROS stack as MPC: this node publishes ``MpcPlan``;
+    ``low_level_cmd_node`` publishes ``cmd_vel`` (see ``controller.launch``).
     """
 
     def __init__(self):
@@ -59,9 +62,8 @@ class MPSFControllerROSNode(ControllerROSNode):
         self.teleop_enabled = mpsf_params.get("teleop_enabled", False)
         self.use_joy = self.teleop_enabled
 
-        # Get simulation timestep for metrics (use controller dt as fallback)
-        sim_config = self.ctrl_config.get("simulation", {})
-        self._sim_timestep = sim_config.get("timestep", getattr(self, "mpc_dt", 0.01))
+        # Physics step for metrics (top-level simulation.timestep, not controller.dt)
+        self._sim_timestep = self.simulation_timestep
 
         if self.teleop_enabled:
             rospy.loginfo("Teleoperation mode enabled - MPSF goals will be ignored")
@@ -288,7 +290,11 @@ class MPSFControllerROSNode(ControllerROSNode):
         self._current_references = references
 
     def _after_control_step(self, t, robot_states, states, references, u_current):
-        """Override to collect metrics after each control step."""
+        """Override to collect metrics after each control step.
+
+        ``u_current`` is ``v_bar[0]`` from the parent loop (MPC preview); see
+        ``ControllerROSNode._after_control_step`` docstring.
+        """
         if self._current_references is not None:
             self.metrics_collector.update(
                 self._current_references,

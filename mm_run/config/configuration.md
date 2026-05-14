@@ -99,12 +99,20 @@ planner:
 ```yaml
 controller:
   type: "MPC"                     # Controller type
-  dt: 0.1                         # MPC time step [s]
+  dt: 0.1                         # MPC discretization [s]; ROS mpc_ros uses rospy.Rate(1/dt) in sim time; robot model uses the same dt
   prediction_horizon: 1.0         # Prediction horizon [s]
-  ctrl_rate: 10                   # Controller update rate [Hz]
-  cmd_vel_pub_rate: 100           # Command velocity publish rate [Hz]
-  cmd_vel_type: "interpolation"   # "integration" or "interpolation"
+  cmd_vel_pub_rate: 100           # Command velocity publish rate [Hz] (used by low_level_cmd_node)
+  cmd_vel_type: "interpolation"   # "integration" or "interpolation" (low_level_cmd_node + sim)
+
+  # ROS: controller.launch starts mpc_ros or mpsf_ros (MpcPlan) + low_level_cmd_node (cmd_vel).
+  # e.g. via run.launch or: roslaunch mm_run controller.launch config:=...
+  low_level_tracking:
+    enabled: false
+    kp: [0, 0, 0, 0, 0, 0, 0, 0, 0]   # length nu or scalar; zeros = feedforward only
+    log_refs: false                   # sim: log ll_v_ffs, ll_q_refs, ll_v_cmds
 ```
+
+**ROS / acados:** If `libacados.so` fails to load (e.g. undefined HPIPM symbol), prepend your acados `lib` directory to `LD_LIBRARY_PATH` in the shell before `roslaunch` (same as for the non-ROS Python experiments).
 
 ### Payload upright (optional)
 
@@ -259,7 +267,6 @@ controller:
       v: int              # Velocity dimension
       x: int              # State dimension (q + v)
       u: int              # Input dimension
-    time_discretization_dt: 0.1
     x0: [q1, ..., qn, v1, ..., vn]
 
     limits:

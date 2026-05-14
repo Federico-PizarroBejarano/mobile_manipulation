@@ -74,7 +74,6 @@ controller:
                  -1.0, -1.0, -0.4, -2, -2, -3, -3, -3, -3 ]
         upper: [ 3, 3, 2pi, 1pi, 1pi, 1pi, 1pi, 1pi, 1pi,
                  1.0, 1.0, 0.4, 2, 2, 3, 3, 3, 3 ]
-    time_discretization_dt: 0.1
     link_names:
       - "base"
       - "ur10_arm_base_link"

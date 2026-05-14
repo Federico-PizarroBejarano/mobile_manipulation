@@ -107,12 +107,16 @@ def main():
     print("Control commands received. Proceed ... ")
     t0 = t
     while not rospy.is_shutdown():
-        print(f"-------------- {(t-t0):.3f}s/{sim.duration}s ------------------")
+        print(
+            f"-------------- {(t - t0):.3f}s/{float(sim.duration):.3f}s ------------------"
+        )
         q, v = robot.joint_states()
         ros_interface.publish_feedback(t, q, v)
         ros_interface.publish_time(t)
 
-        cmd_vel_world = robot.command_velocity(ros_interface.cmd_vel, bodyframe=True)
+        # Same stacking as /ridgeback + /ur10 cmd topics (compare to experiment.py ``cmd_vels``).
+        cmd_model = np.asarray(ros_interface.cmd_vel, dtype=float).reshape(-1)
+        cmd_vel_world = robot.command_velocity(cmd_model, bodyframe=False)
         ee_curr_pos, ee_curr_orn = robot.link_pose()
         vicon_tool_interface.publish_pose(t, ee_curr_pos, ee_curr_orn)
 
@@ -121,6 +125,7 @@ def main():
         v_ew_w, ω_ew_w = robot.link_velocity()
         logger.append("ts", t)
         logger.append("xs", np.hstack((q, v)))
+        logger.append("cmd_vels_model", cmd_model)
         logger.append("cmd_vels", cmd_vel_world)
         logger.append("r_ew_ws", r_ew_w)
         logger.append("Q_wes", Q_we)
@@ -142,7 +147,7 @@ def main():
             break
         if t - t0 >= sim.duration:
             print(
-                f"Simulation duration ({sim.duration}s) exceeded. Stopping simulation."
+                f"Simulation duration ({float(sim.duration):.3f}s) exceeded. Stopping simulation."
             )
             break
 

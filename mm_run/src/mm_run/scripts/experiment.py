@@ -12,8 +12,8 @@ from mm_plan.TaskManager import TaskManager
 from mm_simulator import simulation
 from mm_utils import parsing
 from mm_utils.logging import DataLogger
-from mm_utils.math import compute_velocity_command
 from mm_utils.metrics import extract_robot_states
+from mm_utils.mpc_plan_tracking import build_plan_interpolators, low_level_velocity_step
 
 
 def main():
@@ -125,19 +125,31 @@ def main():
     u = np.zeros(sim_config["robot"]["dims"]["v"])
     controller_run_time = 0.0
 
-    # Controller frequency management
-    ctrl_period = 1.0 / ctrl_config.get("ctrl_rate")
+    ll_cfg = ctrl_config.get("low_level_tracking", {})
+    low_level_on = bool(ll_cfg.get("enabled", False))
+    log_ll_refs = bool(ll_cfg.get("log_refs", False))
+    kp_ll = np.asarray(ll_cfg.get("kp", []), dtype=float).reshape(-1)
+    lb_u = np.asarray(controller.robot.lb_u, dtype=float).reshape(-1)
+    ub_u = np.asarray(controller.robot.ub_u, dtype=float).reshape(-1)
+    dof_mpc = int(controller.DoF)
+
+    # Controller frequency management (one solve per controller.dt of sim time)
+    ctrl_period = float(controller.dt)
     last_controller_time = -ctrl_period  # Initialize to allow first call
+
+    # Cached MPC plan interpolators (rebuilt only when controller.control runs).
+    plan_interps = None
+    references = {}
 
     t = 0.0
     while t <= sim.duration:
         loop_wall_t0 = time.perf_counter()
-        print(f"-------------- {t:.3f}s/{sim.duration}s ------------------")
+        print(f"-------------- {t:.3f}s/{float(sim.duration):.3f}s ------------------")
         # open-loop command
         robot_states = robot.joint_states(add_noise=False)
 
         # Only call controller if enough time has passed
-        if t - last_controller_time >= ctrl_period:
+        if t - last_controller_time + 1e-6 >= ctrl_period:
             # Get references from TaskManager
             references = sot.getReferences(
                 t, robot_states, controller.N + 1, controller.dt
@@ -149,16 +161,45 @@ def main():
             controller_run_time = t1 - t0
             controller_log.log(20, f"Controller Run Time: {controller_run_time}")
             last_controller_time = t
+            q_bar = np.asarray(controller.x_bar, dtype=float)[:, :dof_mpc]
+            plan_interps = build_plan_interpolators(
+                float(controller.dt),
+                u_bar,
+                v_bar,
+                q_bar if low_level_on else None,
+                ctrl_config["cmd_vel_type"],
+            )
 
-        u = compute_velocity_command(
-            u,
-            u_bar,
-            v_bar,
-            ctrl_config["cmd_vel_type"],
-            t - last_controller_time,
-            controller.dt,
-            simulation_dt=sim.timestep,
-        )
+        t_mpc = t - last_controller_time
+        q_meas = np.asarray(robot_states[0], dtype=float).reshape(-1)[:dof_mpc]
+        n_cmd = len(u)
+        lb_use = lb_u[:n_cmd]
+        ub_use = ub_u[:n_cmd]
+        kp_use = kp_ll if (low_level_on and kp_ll.size > 0) else None
+
+        if log_ll_refs and low_level_on:
+            u, ll_diag = low_level_velocity_step(
+                u,
+                t_mpc,
+                sim.timestep,
+                plan_interps,
+                q_meas,
+                kp_use,
+                lb_use,
+                ub_use,
+                return_diagnostics=True,
+            )
+        else:
+            u = low_level_velocity_step(
+                u,
+                t_mpc,
+                sim.timestep,
+                plan_interps,
+                q_meas,
+                kp_use,
+                lb_use,
+                ub_use,
+            )
 
         robot.command_velocity(u)
         t, _ = sim.step(t)
@@ -205,6 +246,14 @@ def main():
         logger.append("xs", np.hstack(robot_states))
         logger.append("controller_run_time", controller_run_time)
         logger.append("cmd_vels", u)
+        if low_level_on and log_ll_refs:
+            logger.append("ll_v_ffs", ll_diag["v_ff"])
+            qr = ll_diag["q_ref"]
+            logger.append(
+                "ll_q_refs",
+                np.full(dof_mpc, np.nan) if qr is None else qr[:dof_mpc],
+            )
+            logger.append("ll_v_cmds", ll_diag["v_cmd"])
         logger.append("r_ew_ws", states["EE"]["pose"][:3])
         # Convert Euler angles back to quaternion for logging
         ee_quat = Rot.from_euler("xyz", states["EE"]["pose"][3:]).as_quat()

@@ -66,7 +66,7 @@ class ControllerROSNode:
         self.planner_config = config["planner"].copy()
         print("planner config: ", self.planner_config)
 
-        self.ctrl_rate = self.ctrl_config["ctrl_rate"]
+        self._mpc_loop_hz = 1.0 / float(self.ctrl_config["dt"])
 
         # set py logger level
         ch = logging.StreamHandler()
@@ -160,7 +160,7 @@ class ControllerROSNode:
         self.sot_lock.release()
 
     def run(self):
-        rate = rospy.Rate(self.ctrl_rate)
+        rate = rospy.Rate(self._mpc_loop_hz)
 
         print("-----Checking Robot Interface-----")
         while not self.robot_interface.ready():

@@ -2,15 +2,19 @@ controller:
   # MPC Controller Type
   type: "MPC"
 
-  # MPC params
+  # MPC params (ROS control loop uses 1/dt Hz in sim time; robot discrete model uses the same dt)
   dt: 0.1
-  robot:
-    time_discretization_dt: 0.1
   prediction_horizon: 1.0
-  ctrl_rate: 10 #hz
   cmd_vel_pub_rate: 100 # hz
   cmd_vel_type: "integration"         # integration: publish vel by integrating from acc_bar
                                         # interpolation: publish vel by interpolating vel_bar
+  # ROS: mpc_ros or mpsf_ros publishes MpcPlan; low_level_cmd_node publishes cmd_vel (controller.launch).
+
+  low_level_tracking:
+    enabled: false
+    kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    log_refs: false   # sim only: log ll_v_ffs, ll_q_refs, ll_v_cmds when enabled
+
   soft_cst: True
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: False

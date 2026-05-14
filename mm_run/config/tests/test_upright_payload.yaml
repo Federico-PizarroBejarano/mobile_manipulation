@@ -6,28 +6,30 @@ planner:
       tracking_pos_err_tol: 0.08
 
 controller:
-  # Match simulation timestep (0.03 s in config/sim/simulation.yaml): finer MPC grid + one solve per sim step.
-  dt: 0.03
+  # MPC dt (0.05 s); PyBullet still uses simulation.timestep (e.g. 0.01 s) via low_level_cmd_node.
+  dt: 0.05
   prediction_horizon: 1.0
-  ctrl_rate: 33.333333333333336
-  robot:
-    time_discretization_dt: 0.03
   base_mask: [false, false, false]
   ee_mask: [true, true, true, false, false, false]
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
   upright:
     enabled: True
-    eps_align: 1e-6
+    eps_align: 1e-4
   acados:
     name: "TestAlignedPayload"
     cython:
       recompile: false
     ocp_solver_options:
       qp_solver_iter_max: 40
+  low_level_tracking:
+    enabled: true
+    kp: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+    log_refs: true   # sim only: log ll_v_ffs, ll_q_refs, ll_v_cmds when enabled
 
 simulation:
-  duration: 4
+  duration: 8
+  timestep: 0.01
   robot:
     home: [0.06492914, -0.05419276, -0.04503236,  1.74097135, -0.31314123,
         0.99901806, -2.25675201,  1.5668383 ,  2.82451102]

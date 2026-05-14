@@ -17,7 +17,6 @@ from mobile_manipulation_central.ros_interface import (
     ViconObjectInterface,
 )
 from nav_msgs.msg import Path
-from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as Rot
 from spatialmath.base import r2q, rpy2r
 from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
@@ -26,6 +25,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import mm_control.MPC as MPC
 from mm_control.robot import CasadiModelInterface, MobileManipulator3D
 from mm_plan.TaskManager import TaskManager
+from mm_run.msg import MpcPlan
 from mm_utils import parsing
 from mm_utils.enums import RefType
 from mm_utils.logging import DataLogger
@@ -77,6 +77,7 @@ class ControllerROSNode:
             )
 
         self.ctrl_config = config["controller"]
+        self.simulation_timestep = float(config["simulation"]["timestep"])
         self.planner_config = config.get("planner", {}).copy()
         print(self.ctrl_config["type"])
         # controller
@@ -86,10 +87,7 @@ class ControllerROSNode:
 
         self.controller = control_class(self.ctrl_config)
 
-        self.ctrl_rate = self.ctrl_config["ctrl_rate"]
-        self.cmd_vel_pub_rate = self.ctrl_config["cmd_vel_pub_rate"]
-        self.mpc_dt = self.ctrl_config["dt"]
-
+        self._mpc_loop_hz = 1.0 / float(self.controller.dt)
         # set py logger level
         ch = logging.StreamHandler()
         formatter = logging.Formatter(
@@ -108,11 +106,13 @@ class ControllerROSNode:
 
         self.logger.add("sim_timestep", config["simulation"]["timestep"])
         self.logger.add("duration", config["simulation"]["duration"])
+        self.sim_duration = float(config["simulation"]["duration"])
 
         self.logger.add("nq", self.ctrl_config["robot"]["dims"]["q"])
         self.logger.add("nv", self.ctrl_config["robot"]["dims"]["v"])
         self.logger.add("nx", self.ctrl_config["robot"]["dims"]["x"])
         self.logger.add("nu", self.ctrl_config["robot"]["dims"]["u"])
+        self._nu_cmd = int(self.ctrl_config["robot"]["dims"]["u"])
 
         # Get shared timestamp from ROS parameter (set by sim node)
         # Wait for sim node to set it
@@ -168,25 +168,9 @@ class ControllerROSNode:
             "controller_tracking_pt", MultiDOFJointTrajectory, queue_size=5
         )
 
-        # publish mpc predicted input trajectory at a higher rate
-        self.cmd_vel = np.zeros(9)
-        self.mpc_plan = None
-        self.mpc_plan_time_stamp = 0
-        dt_pub = 1.0 / self.cmd_vel_pub_rate
-        dt_pub_sec = int(dt_pub)
-        dt_pub_nsec = int((dt_pub - dt_pub_sec) * 1e9)
-        if self.ctrl_config["cmd_vel_type"] == "integration":
-            self.cmd_vel_timer = rospy.Timer(
-                rospy.Duration(dt_pub_sec, dt_pub_nsec),
-                self._publish_cmd_vel_integration,
-            )
-        elif self.ctrl_config["cmd_vel_type"] == "interpolation":
-            self.cmd_vel_timer = rospy.Timer(
-                rospy.Duration(dt_pub_sec, dt_pub_nsec),
-                self._publish_cmd_vel_interpolation,
-            )
+        # High-rate cmd_vel is published by low_level_cmd_node (see controller.launch).
+        self.mpc_plan_pub = rospy.Publisher("mpc_plan", MpcPlan, queue_size=1)
 
-        self.lock = threading.Lock()
         self.sot_lock = threading.Lock()
 
         rospy.on_shutdown(self.shutdownhook)
@@ -197,43 +181,23 @@ class ControllerROSNode:
         self.robot_interface.brake()
         self.logger.save(session_timestamp=self.session_timestamp)
 
-    def _compute_cmd_vel(self, t_elapsed):
-        """Compute current velocity command from interpolated plan.
-
-        Args:
-            t_elapsed (float): Time elapsed since plan was set.
-
-        Returns:
-            np.ndarray: Current velocity command (nu,).
-        """
-        if self.mpc_plan_interp is None:
-            return np.zeros(self.controller.robot.ssSymMdl["nu"])
-        return self.mpc_plan_interp(t_elapsed)
-
-    def _publish_cmd_vel_integration(self, event):
-        if self.mpc_plan is not None:
-            t = rospy.Time.now().to_sec()
-
-            self.lock.acquire()
-            t_elapsed = t - self.mpc_plan_time_stamp
-            self.cmd_vel += (
-                self._compute_cmd_vel(t_elapsed)
-                * (event.current_real - event.last_real).to_sec()
-            )
-
-            self.lock.release()
-
-        self.robot_interface.publish_cmd_vel(self.cmd_vel)
-
-    def _publish_cmd_vel_interpolation(self, event):
-        if self.mpc_plan is not None:
-            t = rospy.Time.now().to_sec()
-            self.lock.acquire()
-            t_elapsed = t - self.mpc_plan_time_stamp
-            self.cmd_vel = self._compute_cmd_vel(t_elapsed)
-            self.lock.release()
-
-        self.robot_interface.publish_cmd_vel(self.cmd_vel)
+    def _publish_mpc_plan(self, t, u_bar, v_bar):
+        """Publish MPC plan for an external low-level velocity node."""
+        dof = int(self.controller.DoF)
+        msg = MpcPlan()
+        msg.header.stamp = rospy.Time.from_sec(t)
+        msg.mpc_dt = float(self.controller.dt)
+        msg.N = int(u_bar.shape[0])
+        msg.nu = int(u_bar.shape[1])
+        msg.dof = dof
+        msg.u_flat = np.asarray(u_bar, dtype=float).ravel(order="C").tolist()
+        msg.v_flat = np.asarray(v_bar, dtype=float).ravel(order="C").tolist()
+        msg.q_flat = (
+            np.asarray(self.controller.x_bar, dtype=float)[:, :dof]
+            .ravel(order="C")
+            .tolist()
+        )
+        self.mpc_plan_pub.publish(msg)
 
     def _publish_trajectory_tracking_pt(self, t, robot_states, planner):
         msg = MultiDOFJointTrajectory()
@@ -332,7 +296,7 @@ class ControllerROSNode:
         m.color.g = rgba[1]
         m.color.b = rgba[2]
         m.color.a = rgba[3]
-        m.lifetime = rospy.Duration.from_sec(1.0 / self.ctrl_rate)
+        m.lifetime = rospy.Duration.from_sec(1.0 / self._mpc_loop_hz)
 
         m.pose.orientation.w = 1
 
@@ -461,7 +425,7 @@ class ControllerROSNode:
         self.controller_visualization_pub.publish(marker_rbase)
 
     def run(self):
-        rate = rospy.Rate(self.ctrl_rate)
+        rate = rospy.Rate(self._mpc_loop_hz)
 
         print("-----Checking Robot Interface-----")
         while not self.robot_interface.ready():
@@ -553,6 +517,11 @@ class ControllerROSNode:
         while not self.ctrl_c:
             t = rospy.Time.now().to_sec()
 
+            # Match experiment.py: one line per control tick (MPC + ROS overhead).
+            print(
+                f"-------------- {(t - t0):.3f}s/{float(self.sim_duration):.3f}s ------------------"
+            )
+
             # open-loop command
             robot_states = (self.robot_interface.q, self.robot_interface.v)
             # check collision
@@ -563,8 +532,6 @@ class ControllerROSNode:
 
                 if min(signed_dist_self) < 0.05 or min(signed_dist_ground) < 0.05:
                     self.controller_log.warning("Self Collision Detected. Braking!!!!")
-                    self.cmd_vel_timer.shutdown()
-
                     self.robot_interface.brake()
                     continue
 
@@ -592,37 +559,7 @@ class ControllerROSNode:
                 print("Close to goal. Braking")
                 v_bar[:, :3] = 0
 
-            if self.ctrl_config["cmd_vel_type"] == "interpolation":
-                mpc_plan = v_bar
-                N = mpc_plan.shape[0]
-                t_mpc = np.arange(N) * self.mpc_dt
-                mpc_plan_interp = interp1d(
-                    t_mpc,
-                    mpc_plan,
-                    axis=0,
-                    bounds_error=False,
-                    fill_value="extrapolate",
-                )
-            elif self.ctrl_config["cmd_vel_type"] == "integration":
-                mpc_plan = u_bar
-                N = mpc_plan.shape[0]
-                t_mpc = np.arange(N) * self.mpc_dt
-                mpc_plan_interp = interp1d(
-                    t_mpc,
-                    mpc_plan,
-                    axis=0,
-                    bounds_error=False,
-                    fill_value=np.zeros_like(u_bar[0]),
-                )
-            self.lock.acquire()
-            self.mpc_plan = mpc_plan
-            self.mpc_plan_time_stamp = t
-            self.mpc_plan_interp = mpc_plan_interp
-            # Update cmd_vel synchronously using the same helper method as timer callbacks
-            # This ensures cmd_vel is current when the hook is called
-            t_elapsed = 0.0  # At the moment of update, elapsed time is 0
-            self.cmd_vel = self._compute_cmd_vel(t_elapsed)
-            self.lock.release()
+            self._publish_mpc_plan(t, u_bar, v_bar)
 
             # publish data
             self._publish_mpc_data(self.controller)
@@ -686,14 +623,17 @@ class ControllerROSNode:
             if self.use_joy and updated:
                 self.task_switch_button_interface.reset_button()
 
-            # Call hook for child classes (e.g., metrics collection)
-            # Use the pre-computed cmd_vel that was updated above
+            # Hook / MPSF metrics: MPC preview velocity at first horizon knot (same row
+            # as in MpcPlan). low_level_cmd_node may integrate/interpolate between solves.
+            u_for_hook = (
+                np.asarray(v_bar[0], dtype=float).reshape(-1)[: self._nu_cmd].copy()
+            )
             self._after_control_step(
                 t - t0,
                 robot_states,
                 states,
                 references,
-                self.cmd_vel,
+                u_for_hook,
             )
 
             # log
@@ -749,9 +689,6 @@ class ControllerROSNode:
                 break
 
             rate.sleep()
-
-        self.cmd_vel_timer.shutdown()
-        self.mpc_plan = None
 
     def go_home(self):
         rate = rospy.Rate(125)
@@ -816,7 +753,10 @@ class ControllerROSNode:
             robot_states (tuple): (q, v) tuple from robot interface.
             states (dict): Dictionary with "base" and "EE" keys containing pose and velocity.
             references (dict): Current references dictionary.
-            u_current (np.ndarray): Current velocity command (nu,).
+            u_current (np.ndarray): MPC preview generalized velocity at the first
+                horizon knot, shape ``(nu,)`` (matches ``v_bar[0]``). High-rate
+                ``cmd_vel`` on the robot comes from ``low_level_cmd_node`` and may
+                differ between MPC solves.
         """
         pass
 

@@ -295,7 +295,10 @@ class MPSFMetricsCollector:
             references (dict): Reference trajectories with optional "base_pose" and
                 "ee_pose" keys, shape (N+1, dim).
             states (dict): Current robot states with "base" and "EE" keys.
-            u (np.ndarray): Current velocity command, shape (nu,).
+            u (np.ndarray): Velocity vector for metrics, shape ``(nu,)``. Under ROS
+                with split low-level, this is ``v_bar[0]`` from the MPC solve (preview
+                at the first horizon knot), not the high-rate ``cmd_vel`` from
+                ``low_level_cmd_node``.
             desired_base_vel (np.ndarray or None): Desired base velocity, shape (3,).
             desired_ee_vel (np.ndarray or None): Desired EE velocity, shape (6,).
             controller: Controller instance with mask attributes and log.

@@ -143,8 +143,8 @@ def run_simulation(
     robot = sim.robot
     u = np.zeros(sim_config["robot"]["dims"]["v"])
 
-    # Controller frequency management
-    ctrl_period = 1.0 / ctrl_config.get("ctrl_rate")
+    # Controller frequency management (one solve per controller.dt of sim time)
+    ctrl_period = float(controller.dt)
     last_controller_time = -ctrl_period  # Initialize to allow first call
 
     metrics_collector = MPSFMetricsCollector()
@@ -155,11 +155,11 @@ def run_simulation(
 
     t = 0.0
     while t <= sim.duration:
-        print(f"-------------- {t:.3f}s/{sim.duration}s ------------------")
+        print(f"-------------- {t:.3f}s/{float(sim.duration):.3f}s ------------------")
         robot_states = robot.joint_states(add_noise=False)
 
         # Only call controller if enough time has passed
-        if t - last_controller_time >= ctrl_period:
+        if t - last_controller_time + 1e-6 >= ctrl_period:
             # Get references from TaskManager (only when controller is called)
             references = task_manager.getReferences(
                 t, robot_states, controller.N + 1, controller.dt

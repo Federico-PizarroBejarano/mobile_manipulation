@@ -6,8 +6,8 @@ include:
     path: "config/controller/MPC.yaml"
 
 controller:
-  # Simulation-specific overrides
-  ctrl_rate: 20  # Higher rate for simulation (20 Hz vs 10 Hz for real robot)
+  # Simulation-specific overrides (20 Hz MPC vs 10 Hz default in MPC.yaml)
+  dt: 0.05
 
   # Disable collision avoidance for simpler simulation
   self_collision_avoidance_enabled: False

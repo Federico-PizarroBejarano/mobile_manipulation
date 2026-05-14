@@ -1,15 +1,26 @@
 <?xml version="1.0"?>
-<!-- Launches the MPC controller ROS node. -->
+<!-- Plan node (mpc_ros or mpsf_ros) publishes mm_run/MpcPlan; low_level_cmd_node publishes cmd_vel. -->
 
 <launch>
+  <!-- acados (HPIPM): if Python fails to load the solver with an undefined symbol from libhpipm,
+       export LD_LIBRARY_PATH=<your_acados_install>/lib:$LD_LIBRARY_PATH before roslaunch. -->
+
   <arg name="config"/>
   <arg name="ctrl_config" default="default" doc="alternative controller config overwriting the one in config"/>
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
   <arg name="mpsf" default="false" doc="use MPSF controller node instead of standard MPC controller"/>
+  <arg name="mpc_plan_topic" default="/mpc_plan" doc="topic for mm_run/MpcPlan between plan and low-level nodes"/>
 
-  <!-- Controller -->
-  <node if="$(arg mpsf)" pkg="mm_run" type="mpsf_ros.py" name="controller_mpsf" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)"/>
-  <node unless="$(arg mpsf)" pkg="mm_run" type="mpc_ros.py" name="controller_mpc" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)"/>
+  <!-- Plan publisher (MPC or MPSF) -->
+  <node if="$(arg mpsf)" pkg="mm_run" type="mpsf_ros.py" name="controller_mpsf" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)">
+    <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
+  </node>
+  <node unless="$(arg mpsf)" pkg="mm_run" type="mpc_ros.py" name="controller_mpc" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)">
+    <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
+  </node>
+  <node pkg="mm_run" type="low_level_cmd_node.py" name="low_level_cmd_node" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config)">
+    <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
+  </node>
 
 </launch>
