@@ -6,8 +6,7 @@ planner:
       tracking_pos_err_tol: 0.08
 
 controller:
-  # MPC dt (0.05 s); PyBullet still uses simulation.timestep (e.g. 0.01 s) via low_level_cmd_node.
-  dt: 0.05
+  dt: 0.1
   prediction_horizon: 1.0
   base_mask: [false, false, false]
   ee_mask: [true, true, true, false, false, false]

@@ -400,21 +400,31 @@ class MPCBase:
 
         # Nonlinear constraints
         h_expr_list = []
+        h_expr_e_list = []
         idxsh = []
+        idxsh_e = []
         h_idx = 0
+        h_e_idx = 0
         for cst in constraints:
-            h_expr_list.append(cst.g_fcn(model.x, model.u, cst.p_sym))
+            h_expr_i = cst.g_fcn(model.x, model.u, cst.p_sym)
+            h_expr_list.append(h_expr_i)
             if cst.slack_enabled and (
                 self.params["acados"]["slack_enabled"]["h"]
                 or self.params["acados"]["slack_enabled"]["h_0"]
-                or self.params["acados"]["slack_enabled"]["h_e"]
             ):
                 idxsh += [h_i for h_i in range(h_idx, h_idx + cst.ng)]
             h_idx += cst.ng
 
+            if getattr(cst, "terminal_enabled", True):
+                h_expr_e_i = cs.substitute(h_expr_i, model.u, [])
+                h_expr_e_list.append(h_expr_e_i)
+                if cst.slack_enabled and self.params["acados"]["slack_enabled"]["h_e"]:
+                    idxsh_e += [h_i for h_i in range(h_e_idx, h_e_idx + cst.ng)]
+                h_e_idx += cst.ng
+
         nsh = len(idxsh) if self.params["acados"]["slack_enabled"]["h"] else 0
-        nsh_e = len(idxsh) if self.params["acados"]["slack_enabled"]["h_e"] else 0
         nsh_0 = len(idxsh) if self.params["acados"]["slack_enabled"]["h_0"] else 0
+        nsh_e = len(idxsh_e) if self.params["acados"]["slack_enabled"]["h_e"] else 0
 
         if len(h_expr_list) > 0:
             h_expr = cs.vertcat(*h_expr_list)
@@ -428,10 +438,6 @@ class MPCBase:
             ocp.constraints.uh = np.zeros(h_expr_num)
             ocp.constraints.lh = -INF * np.ones(h_expr_num)
 
-            model.con_h_expr_e = cs.substitute(h_expr, model.u, [])
-            ocp.constraints.uh_e = np.zeros(h_expr_num)
-            ocp.constraints.lh_e = -INF * np.ones(h_expr_num)
-
             if nsh_0 > 0:
                 ocp.constraints.idxsh_0 = np.array(idxsh)
                 ocp.constraints.lsh_0 = np.zeros(nsh_0)
@@ -440,8 +446,17 @@ class MPCBase:
                 ocp.constraints.idxsh = np.array(idxsh)
                 ocp.constraints.lsh = np.zeros(nsh)
                 ocp.constraints.ush = np.zeros(nsh)
+
+        if len(h_expr_e_list) > 0:
+            h_expr_e = cs.vertcat(*h_expr_e_list)
+            h_expr_e_num = h_expr_e.shape[0]
+
+            model.con_h_expr_e = h_expr_e
+            ocp.constraints.uh_e = np.zeros(h_expr_e_num)
+            ocp.constraints.lh_e = -INF * np.ones(h_expr_e_num)
+
             if nsh_e > 0:
-                ocp.constraints.idxsh_e = np.array(idxsh)
+                ocp.constraints.idxsh_e = np.array(idxsh_e)
                 ocp.constraints.lsh_e = np.zeros(nsh_e)
                 ocp.constraints.ush_e = np.zeros(nsh_e)
 

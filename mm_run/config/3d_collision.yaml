@@ -1,29 +1,47 @@
+# Static-obstacle avoidance demo with MPC.
+# Cylinders stand near x=2 (y=0 and y=2). The robot approaches, then reaches
+# an EE pose past them at safe height while keeping self-collision on.
+
 planner:
   sot_type: "SoTStatic"
   tasks:
-  - name: "EE Pos 1"
+  # Task 1: drive base toward the gap between the two cylinders
+  - name: "Base Approach"
     planner_type: "WaypointPlanner"
-    ee_pose: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]  # [x, y, z, roll, pitch, yaw]
-    hold_period: 3.0
-    tracking_pos_err_tol: 0.02
+    base_pose: [3.0, 0.0, 0.0]  # [x, y, yaw]
+    tracking_pos_err_tol: 0.15
+    tracking_ori_err_tol: 0.2
+
+  # Task 2: reach past the cylinders (z>0; EE pointing down)
+  - name: "EE Past Obstacles"
+    planner_type: "WaypointPlanner"
+    ee_pose: [3.0, 1.0, 1.0, 1pi, 0.0, 0.0]  # [x, y, z, roll, pitch, yaw]
+    hold_period: 1.0
+    tracking_pos_err_tol: 0.05
+    tracking_ori_err_tol: 0.1
 
 simulation:
+  duration: 8
   robot:
-    home: [0, -0, 0, 0.25pi, -0.25pi, 0.5pi, -0.25pi, 0.5pi, 0.417pi]  # standard
+    # Matches controller home "default" from mobile_manipulation_central
+    home: [0.0, 0.0, 0.0, 1.5708, -0.7854, 1.5708, -0.7854, 1.5708, -0.24]
   static_obstacles:
     enabled: True
 
 controller:
   home: "default"
-  self_collision_avoidance_enabled: False
+  self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
 
   collision_constraints_softened:
     self: False
     static_obstacles: False
-  collision_constraint_type: "SignedDistanceConstraint"
+  collision_constraint_type:
+    self: "SignedDistanceConstraint"
+    static_obstacles: "SignedDistanceConstraint"
   type: "MPC"
   acados:
+    name: "Collision3D"
     ocp_solver_options:
       nlp_solver_max_iter: 100
       qp_solver_warm_start: 1

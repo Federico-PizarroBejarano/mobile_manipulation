@@ -27,6 +27,7 @@ class Constraint(ABC):
         self.p_sym = None
 
         self.slack_enabled = False
+        self.terminal_enabled = True
 
         super().__init__()
 
@@ -208,6 +209,7 @@ class AlignedToolConstraint(NonlinearConstraint):
 
     _WORLD_UP = np.array([0.0, 0.0, 1.0], dtype=float)
     _GRAVITY_MAG = 9.81
+    _NORM_EPS = 1e-3
 
     def __init__(
         self,
@@ -240,7 +242,10 @@ class AlignedToolConstraint(NonlinearConstraint):
         a_eff = a_tool_world - g_vec
 
         z_tool_world = C_world_tool @ cs.DM([0.0, 0.0, 1.0])
-        f_dir = a_eff / (cs.norm_2(a_eff) + float(1e-6))
+        # ``norm_2(a_eff)`` has an undefined derivative at zero, which can put
+        # NaNs into the SQP_RTI QP if a trial acceleration cancels gravity.
+        a_eff_norm = cs.sqrt(cs.dot(a_eff, a_eff) + float(self._NORM_EPS**2))
+        f_dir = a_eff / a_eff_norm
         cross_vec = cs.cross(z_tool_world, f_dir)
         dot_val = cs.dot(z_tool_world, f_dir)
         tol = float(eps_align)
@@ -249,6 +254,7 @@ class AlignedToolConstraint(NonlinearConstraint):
             "g_" + self.name, [self.x_sym, self.u_sym, self.p_sym], [self.g_eqn]
         )
         self.slack_enabled = True
+        self.terminal_enabled = False
 
 
 def tool_origin_linear_accel_world_expr(robot_mdl, x_sym, u_sym):

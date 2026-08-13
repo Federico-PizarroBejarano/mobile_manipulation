@@ -21,8 +21,6 @@ controller:
   cst_tol_schedule_enabled: False
   ee_pose_tracking_enabled: True
 
-  self_collision_emergency_stop: True
-
   collision_constraint_type:
     self: "SignedDistanceConstraint"
     static_obstacles: "SignedDistanceConstraint"

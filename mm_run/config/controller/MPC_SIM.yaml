@@ -13,8 +13,9 @@ controller:
   self_collision_avoidance_enabled: False
   static_obstacles_collision_avoidance_enabled: False
 
-  # Simplified collision constraint type (scalar instead of per-type dict)
-  collision_constraint_type: "SignedDistanceConstraint"
+  collision_constraint_type:
+    self: "SignedDistanceConstraint"
+    static_obstacles: "SignedDistanceConstraint"
 
   # Enable soft constraints for static obstacles in simulation
   collision_constraints_softened:

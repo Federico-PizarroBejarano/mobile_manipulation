@@ -13,8 +13,10 @@ class RBF:
     zeta_sym = cs.MX.sym("zeta")
     h_sym = cs.MX.sym("h")
 
+    # CasADi evaluates both conditional branches: log must stay defined for h<=0.
+    h_pos = cs.fmax(h_sym, 1e-12)
     B_eqn_list = [
-        -mu_sym * cs.log(h_sym),
+        -mu_sym * cs.log(h_pos),
         mu_sym
         * (0.5 * (((h_sym - 2 * zeta_sym) / zeta_sym) ** 2 - 1) - cs.log(zeta_sym)),
     ]
@@ -243,15 +245,16 @@ class PoseSE3CostFunction(CostFunctions):
         self.W = self.p_struct["W"]
         self.r = self.p_struct["r"]
 
-        # Setup SE3 pose cost
+        # Setup SE3 pose cost.
+        # Do NOT use liecasadi SO3.from_matrix: its sqrt-based quaternion chart has
+        # undefined derivatives at identity (and near it), which injects NaNs into
+        # the Gauss-Newton Hessian while holding a reached EE goal.
         r_pos = self.r[:3]
         r_rot_euler = self.r[3:]
         pos, rot = f_fcn(self.x_sym)
         e_pos = pos - r_pos
-        orn = SO3.from_matrix(rot)
-        rot_inv = SO3(cs.vertcat(-orn.xyzw[:3], orn.xyzw[3])).as_matrix()
         r_rot = SO3.from_euler(r_rot_euler).as_matrix()
-        e_rot = casadi_SO3_log(rot_inv @ r_rot)
+        e_rot = casadi_SO3_log(rot.T @ r_rot)
 
         self.e_eqn = cs.vertcat(e_pos, e_rot)
         self.J_eqn = 0.5 * self.e_eqn.T @ self.W @ self.e_eqn

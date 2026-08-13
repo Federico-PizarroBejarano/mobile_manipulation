@@ -295,32 +295,37 @@ def casadi_SO3_Rx(theta):
 def casadi_SO3_log(R):
     """Compute logarithm map of SO(3) rotation matrix using CasADi.
 
+    Numerically safe for CasADi ``conditional`` / ``if_else``, which evaluate
+    *both* branches: formulas must not produce NaNs at ``theta=0`` or when
+    ``(trace(R)-1)/2`` is slightly outside ``[-1, 1]`` due to roundoff.
+
     Args:
         R (casadi.MX): 3x3 rotation matrix.
 
     Returns:
         casadi.MX: Rotation vector (axis-angle representation), shape (3,).
     """
-    theta = cs.acos((cs.trace(R) - 1) / 2)
-    coeff_large_angle = theta / (2 * cs.sin(theta))
-    coeff_small_angle = theta / (2 * (theta - theta**3 / 6 + theta**5 / 120))
-    omega_cross_large_angle = coeff_large_angle * (R - R.T)
-    omega_cross_small_angle = coeff_small_angle * (R - R.T)
-    omega_large_angle = cs.vertcat(
-        omega_cross_large_angle[2, 1],
-        omega_cross_large_angle[0, 2],
-        omega_cross_large_angle[1, 0],
-    )
-    omega_small_angle = cs.vertcat(
-        omega_cross_small_angle[2, 1],
-        omega_cross_small_angle[0, 2],
-        omega_cross_small_angle[1, 0],
+    # Clip for acos domain: non-orthogonal R from numerics can push this outside [-1, 1].
+    cos_theta = cs.fmin(cs.fmax((cs.trace(R) - 1) / 2, -1 + 1e-12), 1 - 1e-12)
+    theta = cs.acos(cos_theta)
+
+    # vee(R - R.T) elements (unscaled); log = (theta / (2 sin theta)) * vee(R-R.T)
+    skew_vee = cs.vertcat(
+        R[2, 1] - R[1, 2],
+        R[0, 2] - R[2, 0],
+        R[1, 0] - R[0, 1],
     )
 
-    omega_list = [omega_small_angle, omega_large_angle]
-    omega = cs.conditional(theta > 1e-2, omega_list, 0, False)
+    # theta/(2 sin theta) -> 1/2 as theta -> 0. Rewrite small-angle form without 0/0.
+    # 1/(2*(1 - theta^2/6 + theta^4/120)) == theta/(2*(theta - theta^3/6 + theta^5/120))
+    coeff_small = 0.5 / (1 - theta**2 / 6 + theta**4 / 120)
+    # Unused-branch safe at theta=0 (CasADi evaluates both sides of conditional).
+    sin_theta = cs.sin(theta)
+    coeff_large = theta / (2 * sin_theta + 1e-16)
 
-    return omega
+    coeff_list = [coeff_small, coeff_large]
+    coeff = cs.conditional(theta > 1e-2, coeff_list, 0, False)
+    return coeff * skew_vee
 
 
 def normalize_mask(mask=None, dim=None):

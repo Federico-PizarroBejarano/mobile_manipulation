@@ -136,13 +136,10 @@ class ControllerROSNode:
             self.use_joy = False
 
         casadi_kin_dyn = CasadiModelInterface(self.ctrl_config)
-        if self.ctrl_config["self_collision_emergency_stop"]:
-            self.self_collision_func = casadi_kin_dyn.signedDistanceSymMdlsPerGroup[
-                "self"
-            ]
-            self.ground_collision_func = casadi_kin_dyn.signedDistanceSymMdlsPerGroup[
-                "static_obstacles"
-            ]["ground"]
+        self.self_collision_func = casadi_kin_dyn.signedDistanceSymMdlsPerGroup["self"]
+        self.ground_collision_func = casadi_kin_dyn.signedDistanceSymMdlsPerGroup[
+            "static_obstacles"
+        ]["ground"]
 
         self.controller_visualization_pub = rospy.Publisher(
             "controller_visualization", Marker, queue_size=10
@@ -197,6 +194,30 @@ class ControllerROSNode:
             .ravel(order="C")
             .tolist()
         )
+        self.mpc_plan_pub.publish(msg)
+
+    def _publish_brake_plan(self, t):
+        """Publish a zero plan so low_level_cmd_node stops replaying old cmds.
+
+        ``robot_interface.brake()`` alone is not enough: the low-level node keeps
+        publishing from the last ``MpcPlan`` and overwrites the brake.
+        """
+        nu = int(self.controller.nu)
+        dof = int(self.controller.DoF)
+        N = 1
+        u_bar = np.zeros((N, nu))
+        v_bar = np.zeros((N + 1, nu))
+        q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[:dof]
+        q_bar = np.tile(q, (N + 1, 1))
+        msg = MpcPlan()
+        msg.header.stamp = rospy.Time.from_sec(t)
+        msg.mpc_dt = float(self.controller.dt)
+        msg.N = N
+        msg.nu = nu
+        msg.dof = dof
+        msg.u_flat = u_bar.ravel(order="C").tolist()
+        msg.v_flat = v_bar.ravel(order="C").tolist()
+        msg.q_flat = q_bar.ravel(order="C").tolist()
         self.mpc_plan_pub.publish(msg)
 
     def _publish_trajectory_tracking_pt(self, t, robot_states, planner):
@@ -524,16 +545,30 @@ class ControllerROSNode:
 
             # open-loop command
             robot_states = (self.robot_interface.q, self.robot_interface.v)
-            # check collision
-            q = robot_states[0]
-            if self.ctrl_config["self_collision_emergency_stop"]:
-                signed_dist_self = self.self_collision_func(q).full().flatten()
-                signed_dist_ground = self.ground_collision_func(q).full().flatten()
 
-                if min(signed_dist_self) < 0.05 or min(signed_dist_ground) < 0.05:
-                    self.controller_log.warning("Self Collision Detected. Braking!!!!")
-                    self.robot_interface.brake()
-                    continue
+            # Emergency stop
+            q = robot_states[0]
+            signed_dist_self = self.self_collision_func(q).full().flatten()
+            self_hit = float(np.min(signed_dist_self)) < 0.025
+            signed_dist_ground = self.ground_collision_func(q).full().flatten()
+            ground_hit = float(np.min(signed_dist_ground)) < 0.025
+
+            if self_hit or ground_hit:
+                what = []
+                if self_hit:
+                    what.append(f"self(sd_min={float(np.min(signed_dist_self)):.4f})")
+                if ground_hit:
+                    what.append(
+                        f"ground(sd_min={float(np.min(signed_dist_ground)):.4f})"
+                    )
+                self.controller_log.warning(
+                    "Collision E-stop (%s). Braking and clearing MpcPlan.",
+                    ", ".join(what),
+                )
+                self._publish_brake_plan(t)
+                self.robot_interface.brake()
+                rate.sleep()
+                continue
 
             # Get references from TaskManager
             self.sot_lock.acquire()
@@ -607,7 +642,12 @@ class ControllerROSNode:
                 states["joy"] = button
 
             self.sot_lock.acquire()
-            updated, _ = self.sot.update(t - t0, states)
+            updated, _ = self.sot.update(
+                t - t0,
+                states,
+                base_mask=self.controller.base_mask,
+                ee_mask=self.controller.ee_mask,
+            )
             # Check if all tasks are finished
             all_finished = (
                 self.sot.planner_num > 0

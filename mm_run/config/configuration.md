@@ -130,7 +130,6 @@ controller:
   # Enable collision avoidance
   self_collision_avoidance_enabled: bool
   static_obstacles_collision_avoidance_enabled: bool
-  self_collision_emergency_stop: bool
 
   # Constraint types
   collision_constraint_type:

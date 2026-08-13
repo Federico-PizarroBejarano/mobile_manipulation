@@ -114,9 +114,9 @@ def main():
         ros_interface.publish_feedback(t, q, v)
         ros_interface.publish_time(t)
 
-        # Same stacking as /ridgeback + /ur10 cmd topics (compare to experiment.py ``cmd_vels``).
+        # /ridgeback/cmd_vel is body-frame; command_velocity converts it to world.
         cmd_model = np.asarray(ros_interface.cmd_vel, dtype=float).reshape(-1)
-        cmd_vel_world = robot.command_velocity(cmd_model, bodyframe=False)
+        cmd_vel_world = robot.command_velocity(cmd_model, bodyframe=True)
         ee_curr_pos, ee_curr_orn = robot.link_pose()
         vicon_tool_interface.publish_pose(t, ee_curr_pos, ee_curr_orn)
 

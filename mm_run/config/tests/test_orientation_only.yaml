@@ -1,22 +1,22 @@
 # Integration Test: Orientation-Only Movement
-# Tests: Angular velocity tracking in state dictionary
-# This verifies that the system can track orientation changes
-# and that angular velocities are correctly included in state dictionary
+# Hold EE position and change orientation only (z-position must stay in the mask /
+# reference — otherwise free translation dips the arm into the ground).
 
 planner:
   tasks:
   - name: EE Orientation Facing Down
     planner_type: WaypointPlanner
-    ee_pose: [3, 0, 0, -1pi, 0, 0]  # World frame: [x, y, z, roll, pitch, yaw]
+    ee_pose: [0, 0, 1, -1pi, 0, 0]  # World frame: [x, y, z, roll, pitch, yaw]
     tracking_ori_err_tol: 0.05
   - name: EE Orientation Facing Backwards
     planner_type: WaypointPlanner
-    ee_pose: [0, 2, 0, -1pi, 0.5pi, 0]  # World frame: [x, y, z, roll, pitch, yaw]
+    ee_pose: [0, 0, 1, -1pi, 0.5pi, 0]  # World frame: [x, y, z, roll, pitch, yaw]
     tracking_ori_err_tol: 0.05
 
 controller:
   base_mask: [false, false, false]
-  ee_mask: [false, false, false, true, true, true]  # Only orientation matters
+  # Track z-position + orientation so the arm does not freely translate into the ground
+  ee_mask: [false, false, true, true, true, true]
 
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: False
@@ -24,7 +24,7 @@ controller:
     name: "TestOrientationTracking"
 
 simulation:
-  duration: 4
+  duration: 8
 
 include:
   - package: "mm_run"

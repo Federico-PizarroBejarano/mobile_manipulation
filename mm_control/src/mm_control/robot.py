@@ -14,6 +14,14 @@ from mm_utils import parsing
 import hppfcl as fcl  # isort: skip
 import casadi_kin_dyn.py3casadi_kin_dyn as cas_kin_dyn  # isort: skip
 
+# Keep collision Jacobians finite when sphere centers coincide (QP trial points).
+_NORM_EPS2 = 1e-12
+
+
+def _safe_norm_2(v):
+    """Euclidean norm with a tiny floor so derivatives stay defined at the origin."""
+    return cs.sqrt(cs.dot(v, v) + _NORM_EPS2)
+
 
 def signed_distance_sphere_sphere(c1, c2, r1, r2):
     """Signed distance between two spheres.
@@ -27,7 +35,7 @@ def signed_distance_sphere_sphere(c1, c2, r1, r2):
     Returns:
         casadi.MX or float: Signed distance between the spheres.
     """
-    return cs.norm_2(c1 - c2) - r1 - r2
+    return _safe_norm_2(c1 - c2) - r1 - r2
 
 
 def signed_distance_half_space_sphere(d, p, n, c, r):
@@ -63,8 +71,8 @@ def signed_distance_sphere_cylinder(
     Returns:
         casadi.MX or float: Signed distance between sphere and cylinder.
     """
-    # Distance in x-y plane
-    dist_xy = cs.norm_2(c_sphere[:2] - c_cylinder[:2])
+    # Distance in x-y plane (safe norm: derivative undefined at coaxial centers)
+    dist_xy = _safe_norm_2(c_sphere[:2] - c_cylinder[:2])
 
     if half_length is None:
         # Infinite height: only consider x-y distance
@@ -86,11 +94,11 @@ def signed_distance_sphere_cylinder(
     dist_xy_to_edge = cs.fmax(
         dist_xy - r_cylinder, 0
     )  # Distance from sphere center to cap edge in x-y
-    dist_above = cs.sqrt(dist_xy_to_edge**2 + z_above**2) - r_sphere
+    dist_above = cs.sqrt(dist_xy_to_edge**2 + z_above**2 + _NORM_EPS2) - r_sphere
 
     # If below cylinder: distance to bottom cap
     z_below = z_min - z_sphere
-    dist_below = cs.sqrt(dist_xy_to_edge**2 + z_below**2) - r_sphere
+    dist_below = cs.sqrt(dist_xy_to_edge**2 + z_below**2 + _NORM_EPS2) - r_sphere
 
     # Select appropriate distance based on z position
     # If z_sphere < z_min: use dist_below
@@ -649,9 +657,17 @@ class Scene:
         else:
             self.kindyn = None
 
-        self.collision_link_names = config["scene"].get(
-            "collision_link_names", {"static_obstacles": ["ground"]}
-        )
+        # Copy so we can inject invariants without mutating the parsed config.
+        self.collision_link_names = {
+            group: list(names)
+            for group, names in config["scene"]
+            .get("collision_link_names", {"static_obstacles": []})
+            .items()
+        }
+        # Ground is always a static obstacle: the robot can always hit the floor.
+        static = self.collision_link_names.setdefault("static_obstacles", [])
+        if "ground" not in static:
+            static.insert(0, "ground")
         self._setupCollisionLinkKinSymMdl()
 
     def _setupCollisionLinkKinSymMdl(self):
