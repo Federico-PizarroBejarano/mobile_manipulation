@@ -8,6 +8,8 @@ from typing import Callable, Literal
 import numpy as np
 from scipy.interpolate import interp1d
 
+from mm_utils.math import wrap_pi_scalar
+
 CmdVelType = Literal["integration", "interpolation"]
 
 
@@ -105,6 +107,8 @@ def _joint_error_to_nu(q_ref: np.ndarray, q_meas: np.ndarray, nu: int) -> np.nda
     err = np.zeros(nu, dtype=float)
     n = min(nu, dof)
     err[:n] = q_ref[:n] - q_meas[:n]
+    if n > 2:
+        err[2] = wrap_pi_scalar(err[2])
     return err
 
 

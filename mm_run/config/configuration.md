@@ -99,16 +99,18 @@ planner:
 ```yaml
 controller:
   type: "MPC"                     # Controller type
-  dt: 0.1                         # MPC discretization [s]; ROS mpc_ros uses rospy.Rate(1/dt) in sim time; robot model uses the same dt
+  dt: 0.1                         # MPC discretization [s]; ROS loop paces to 1/dt Hz
   prediction_horizon: 1.0         # Prediction horizon [s]
   cmd_vel_pub_rate: 100           # Command velocity publish rate [Hz] (used by low_level_cmd_node)
-  cmd_vel_type: "interpolation"   # "integration" or "interpolation" (low_level_cmd_node + sim)
+  cmd_vel_type: "interpolation"   # interpolation: cmd from vel_bar; integration: cmd from acc_bar
+  ros_visualization_enabled: true
+  ros_visualization_rate: 5.0     # Hz; 0 disables the planner marker timer
 
   # ROS: controller.launch starts mpc_ros or mpsf_ros (MpcPlan) + low_level_cmd_node (cmd_vel).
   # e.g. via run.launch or: roslaunch mm_run controller.launch config:=...
   low_level_tracking:
     enabled: false
-    kp: [0, 0, 0, 0, 0, 0, 0, 0, 0]   # length nu or scalar; zeros = feedforward only
+    kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # length nu; unused unless enabled
     log_refs: false                   # sim: log ll_v_ffs, ll_q_refs, ll_v_cmds
 ```
 
@@ -145,6 +147,11 @@ controller:
   collision_constraints_softened:
     self: bool
     static_obstacles: bool
+
+  # mpc_ros E-stop threshold [m]: brake and shut down when a signed distance
+  # drops below it. Keep below collision_safety_margin, since softened
+  # constraints let the MPC operate inside that margin.
+  collision_estop_margin: float
 ```
 
 ### Soft Constraints
@@ -224,16 +231,16 @@ controller:
     use_terminal_cost: bool
 
     ocp_solver_options:
-      qp_solver: "FULL_CONDENSING_HPIPM"  # QP solver type
+      qp_solver: "PARTIAL_CONDENSING_HPIPM"
       nlp_solver_type: "SQP_RTI" | "SQP"
       nlp_solver_max_iter: 100
       nlp_solver_tol_comp: 1.e-06
       nlp_solver_tol_stat: 1.0e-03
       nlp_solver_tol_eq: 1.0e-02
       nlp_solver_tol_ineq: 1.0e-02
-      qp_solver_iter_max: 100
+      qp_solver_iter_max: 40
       qp_solver_warm_start: 2
-      integrator_type: "IRK"
+      integrator_type: "ERK"
       hessian_approx: "GAUSS_NEWTON"
       globalization: "MERIT_BACKTRACKING"
       print_level: 0

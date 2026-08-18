@@ -2,13 +2,14 @@ controller:
   # MPC Controller Type
   type: "MPC"
 
-  # MPC params (ROS control loop uses 1/dt Hz in sim time; robot discrete model uses the same dt)
+  # MPC params (ROS control loop runs at 1/dt Hz; robot discrete model uses the same dt)
   dt: 0.1
   prediction_horizon: 1.0
   cmd_vel_pub_rate: 100 # hz
-  cmd_vel_type: "integration"         # integration: publish vel by integrating from acc_bar
-                                        # interpolation: publish vel by interpolating vel_bar
-  # ROS: mpc_ros or mpsf_ros publishes MpcPlan; low_level_cmd_node publishes cmd_vel (controller.launch).
+  cmd_vel_type: "interpolation"       # interpolation: cmd from vel_bar; integration: cmd from acc_bar
+  # ROS: mpc_ros publishes MpcPlan; low_level_cmd_node publishes cmd_vel (controller.launch).
+  ros_visualization_enabled: True
+  ros_visualization_rate: 5.0         # Hz; planner/MPC markers (0 disables timer)
 
   low_level_tracking:
     enabled: false
@@ -32,6 +33,10 @@ controller:
   collision_safety_margin:
     self: 0.10
     static_obstacles: 0.10
+
+  # mpc_ros E-stop: brake and shut down when a signed distance drops below this.
+  # Must stay below collision_safety_margin, which the MPC is allowed to enter.
+  collision_estop_margin: 0.0
 
   # Payload balancing (aligned acceleration constraint, MPC-only); link/up/g fixed in code
   upright:
@@ -110,11 +115,11 @@ controller:
       # PARTIAL_CONDENSING_HPIPM, FULL_CONDENSING_QPOASES, FULL_CONDENSING_HPIPM,
       # PARTIAL_CONDENSING_QPDUNES, PARTIAL_CONDENSING_OSQP, FULL_CONDENSING_DAQP
       hessian_approx: "GAUSS_NEWTON"
-      integrator_type: "IRK"
+      integrator_type: "ERK"
       print_level: 0
       nlp_solver_type: "SQP_RTI"  #SQP_RTI, SQP
       globalization: "MERIT_BACKTRACKING"
-      qp_solver_iter_max: 100
+      qp_solver_iter_max: 40
       nlp_solver_tol_comp: 1.e-06
       nlp_solver_tol_stat: 1.0e-03
       nlp_solver_tol_eq: 1.0e-02

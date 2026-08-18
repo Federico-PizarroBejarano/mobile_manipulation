@@ -21,7 +21,7 @@ planner:
     tracking_ori_err_tol: 0.1
 
 simulation:
-  duration: 8
+  duration: 9
   robot:
     # Matches controller home "default" from mobile_manipulation_central
     home: [0.0, 0.0, 0.0, 1.5708, -0.7854, 1.5708, -0.7854, 1.5708, -0.24]
@@ -43,7 +43,6 @@ controller:
   acados:
     name: "Collision3D"
     ocp_solver_options:
-      nlp_solver_max_iter: 100
       qp_solver_warm_start: 1
     slack_enabled:
       x: True

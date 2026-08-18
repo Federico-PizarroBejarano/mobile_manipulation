@@ -23,7 +23,7 @@ from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectory
 from visualization_msgs.msg import Marker, MarkerArray
 
 import mm_control.MPC as MPC
-from mm_control.robot import CasadiModelInterface, MobileManipulator3D
+from mm_control.robot import MobileManipulator3D
 from mm_plan.TaskManager import TaskManager
 from mm_run.msg import MpcPlan
 from mm_utils import parsing
@@ -135,11 +135,15 @@ class ControllerROSNode:
         else:
             self.use_joy = False
 
-        casadi_kin_dyn = CasadiModelInterface(self.ctrl_config)
-        self.self_collision_func = casadi_kin_dyn.signedDistanceSymMdlsPerGroup["self"]
-        self.ground_collision_func = casadi_kin_dyn.signedDistanceSymMdlsPerGroup[
-            "static_obstacles"
-        ]["ground"]
+        mi = self.controller.model_interface
+        self.self_collision_func = mi.getSignedDistanceSymMdls("self")
+        self.ground_collision_func = mi.getSignedDistanceSymMdls("ground")
+        self._estop_margin = float(self.ctrl_config["collision_estop_margin"])
+        self._viz_enabled = bool(
+            self.ctrl_config.get("ros_visualization_enabled", True)
+        )
+        self._viz_rate = float(self.ctrl_config.get("ros_visualization_rate", 5.0))
+        self._use_sim_time = bool(rospy.get_param("/use_sim_time", False))
 
         self.controller_visualization_pub = rospy.Publisher(
             "controller_visualization", Marker, queue_size=10
@@ -219,6 +223,11 @@ class ControllerROSNode:
         msg.v_flat = v_bar.ravel(order="C").tolist()
         msg.q_flat = q_bar.ravel(order="C").tolist()
         self.mpc_plan_pub.publish(msg)
+
+    def _brake(self, t):
+        """Stop the robot: zero the plan first, then brake the interface."""
+        self._publish_brake_plan(t)
+        self.robot_interface.brake()
 
     def _publish_trajectory_tracking_pt(self, t, robot_states, planner):
         msg = MultiDOFJointTrajectory()
@@ -322,6 +331,22 @@ class ControllerROSNode:
         m.pose.orientation.w = 1
 
         return m
+
+    def _end_mpc_cycle(self, cycle_t0, period, rate):
+        """Pad the cycle to ``period``: sim time via ``rate``, else leftover wall time."""
+        work_s = time.perf_counter() - cycle_t0
+        if self._use_sim_time:
+            rate.sleep()
+        else:
+            leftover = float(period) - work_s
+            if leftover > 0.0:
+                time.sleep(leftover)
+        cycle_s = time.perf_counter() - cycle_t0
+        self.controller_log.log(
+            20, f"Controller Cycle Work: {work_s:.6f} Period: {cycle_s:.6f}"
+        )
+        self.logger.append("controller_cycle_work", work_s)
+        self.logger.append("controller_cycle_period", cycle_s)
 
     def _publish_planner_data(self, event):
         self.sot_lock.acquire()
@@ -515,7 +540,9 @@ class ControllerROSNode:
             else:
                 raise Exception("Joystick not ready")
 
-        rospy.Timer(rospy.Duration(0, int(1e8)), self._publish_planner_data)
+        if self._viz_enabled and self._viz_rate > 0.0:
+            viz_period = 1.0 / self._viz_rate
+            rospy.Timer(rospy.Duration.from_sec(viz_period), self._publish_planner_data)
 
         if self.use_joy:
             print("----- Press start button (Square/PS4 or X/XBOX) to start -----")
@@ -524,7 +551,10 @@ class ControllerROSNode:
 
             self.start_end_button_interface.reset_button()
         else:
-            input("----- Press Enter to start -----")
+            if sys.stdin.isatty():
+                input("----- Press Enter to start -----")
+            else:
+                print("----- Non-interactive start: skipping Enter prompt -----")
 
         self.sot.activatePlanners()
         t = rospy.Time.now().to_sec()
@@ -535,7 +565,9 @@ class ControllerROSNode:
         rospy.set_param("/controller_started", True)
         rospy.set_param("/controller_finished", False)
 
+        mpc_period = float(self.controller.dt)
         while not self.ctrl_c:
+            cycle_t0 = time.perf_counter()
             t = rospy.Time.now().to_sec()
 
             # Match experiment.py: one line per control tick (MPC + ROS overhead).
@@ -546,29 +578,27 @@ class ControllerROSNode:
             # open-loop command
             robot_states = (self.robot_interface.q, self.robot_interface.v)
 
-            # Emergency stop
+            # Emergency stop. Braking cannot restore clearance, so this is
+            # terminal: continuing would re-trip every cycle forever.
             q = robot_states[0]
-            signed_dist_self = self.self_collision_func(q).full().flatten()
-            self_hit = float(np.min(signed_dist_self)) < 0.025
-            signed_dist_ground = self.ground_collision_func(q).full().flatten()
-            ground_hit = float(np.min(signed_dist_ground)) < 0.025
+            sd_self = float(np.min(self.self_collision_func(q).full()))
+            sd_ground = float(np.min(self.ground_collision_func(q).full()))
 
-            if self_hit or ground_hit:
-                what = []
-                if self_hit:
-                    what.append(f"self(sd_min={float(np.min(signed_dist_self)):.4f})")
-                if ground_hit:
-                    what.append(
-                        f"ground(sd_min={float(np.min(signed_dist_ground)):.4f})"
-                    )
-                self.controller_log.warning(
-                    "Collision E-stop (%s). Braking and clearing MpcPlan.",
-                    ", ".join(what),
+            if sd_self < self._estop_margin or sd_ground < self._estop_margin:
+                self.controller_log.error(
+                    "Collision E-stop (self sd_min=%.4f, ground sd_min=%.4f, "
+                    "margin=%.4f). Braking, then shutting down.",
+                    sd_self,
+                    sd_ground,
+                    self._estop_margin,
                 )
-                self._publish_brake_plan(t)
-                self.robot_interface.brake()
-                rate.sleep()
-                continue
+                self._brake(t)
+                # Let the zero plan and brake reach the low-level node before exit.
+                time.sleep(2.0 * mpc_period)
+                raise RuntimeError(
+                    f"collision E-stop: self sd_min={sd_self:.4f}, "
+                    f"ground sd_min={sd_ground:.4f}, margin={self._estop_margin:.4f}"
+                )
 
             # Get references from TaskManager
             self.sot_lock.acquire()
@@ -580,7 +610,16 @@ class ControllerROSNode:
             self.update_references(references, robot_states)
 
             tc1 = time.perf_counter()
-            v_bar, u_bar = self.controller.control(t - t0, robot_states, references)
+            try:
+                v_bar, u_bar = self.controller.control(t - t0, robot_states, references)
+            except Exception:
+                self.controller_log.exception(
+                    "MPC solve failed. Braking, then shutting down."
+                )
+                self._brake(t)
+                # Let the zero plan and brake reach the low-level node before exit.
+                time.sleep(2.0 * mpc_period)
+                raise
             tc2 = time.perf_counter()
             self.controller_log.log(20, f"Controller Run Time: {tc2 - tc1}")
 
@@ -596,13 +635,14 @@ class ControllerROSNode:
 
             self._publish_mpc_plan(t, u_bar, v_bar)
 
-            # publish data
-            self._publish_mpc_data(self.controller)
-            # Get active planner for visualization
-            self.sot_lock.acquire()
-            active_planner = self.sot.getPlanner()
-            self.sot_lock.release()
-            self._publish_trajectory_tracking_pt(t - t0, robot_states, active_planner)
+            if self._viz_enabled:
+                self._publish_mpc_data(self.controller)
+                self.sot_lock.acquire()
+                active_planner = self.sot.getPlanner()
+                self.sot_lock.release()
+                self._publish_trajectory_tracking_pt(
+                    t - t0, robot_states, active_planner
+                )
 
             # Update Task Manager
             # Convert to pose arrays in world frame
@@ -728,7 +768,7 @@ class ControllerROSNode:
             if self.use_joy and self.start_end_button_interface.button == 1:
                 break
 
-            rate.sleep()
+            self._end_mpc_cycle(cycle_t0, mpc_period, rate)
 
     def go_home(self):
         rate = rospy.Rate(125)

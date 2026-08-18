@@ -50,8 +50,13 @@ class LowLevelCmdNode:
         self.rate_hz = float(self.ctrl_config["cmd_vel_pub_rate"])
 
         ll = self.ctrl_config.get("low_level_tracking", {})
+        self.ll_enabled = bool(ll.get("enabled", False))
         self.kp = np.asarray(ll.get("kp", []), dtype=float).reshape(-1)
-        self.kp_arg = self.kp if self.kp.size > 0 else None
+        self.kp_arg = (
+            self.kp
+            if (self.ll_enabled and self.kp.size > 0 and np.any(self.kp != 0.0))
+            else None
+        )
 
         self.robot_mdl = MobileManipulator3D(self.ctrl_config)
         self.lb_u_full = np.asarray(self.robot_mdl.lb_u, dtype=float).reshape(-1)

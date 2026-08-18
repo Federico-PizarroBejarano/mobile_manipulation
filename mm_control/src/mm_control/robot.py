@@ -554,16 +554,25 @@ class CasadiModelInterface:
             name (str): Collision link name.
 
         Returns:
-            casadi.Function or None: Signed distance function, or None if not found.
+            casadi.Function: Signed distance function.
+
+        Raises:
+            KeyError: If ``name`` is not a collision link in the scene.
         """
         if name == "self":
             return self.signedDistanceSymMdlsPerGroup["self"]
-        else:
-            for group, name_list in self.scene.collision_link_names.items():
-                if name in name_list:
-                    return self.signedDistanceSymMdlsPerGroup[group][name]
-        print(name + " signed distance function does not exist")
-        return None
+        for group, name_list in self.scene.collision_link_names.items():
+            if name in name_list:
+                return self.signedDistanceSymMdlsPerGroup[group][name]
+        known = sorted(
+            n
+            for name_list in self.scene.collision_link_names.values()
+            for n in name_list
+        )
+        raise KeyError(
+            f"No signed distance function for collision link '{name}'. "
+            f"Known links: {known}"
+        )
 
     def evaluateSignedDistance(
         self, names: List[str], qs: ndarray, params: Dict[str, List[ndarray]] = {}
