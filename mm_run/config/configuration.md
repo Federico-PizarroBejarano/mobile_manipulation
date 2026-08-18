@@ -99,10 +99,13 @@ planner:
 ```yaml
 controller:
   type: "MPC"                     # Controller type
-  dt: 0.1                         # MPC discretization [s]; ROS loop paces to 1/dt Hz
+  dt: 0.1                         # OCP discretization [s] (horizon / dt = N)
   prediction_horizon: 1.0         # Prediction horizon [s]
+  ctrl_rate: 20                   # MPC solve rate [Hz]; independent of dt
   cmd_vel_pub_rate: 100           # Command velocity publish rate [Hz] (used by low_level_cmd_node)
   cmd_vel_type: "interpolation"   # interpolation: cmd from vel_bar; integration: cmd from acc_bar
+  cmd_vel_lpf: 0.9                # low-pass: alpha * new + (1-alpha) * last; 1.0 disables
+  cmd_vel_stale_s: 0.5            # zero cmd_vel if plan older than this [s] (also capped by horizon)
   ros_visualization_enabled: true
   ros_visualization_rate: 5.0     # Hz; 0 disables the planner marker timer
 

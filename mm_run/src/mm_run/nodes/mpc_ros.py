@@ -87,7 +87,9 @@ class ControllerROSNode:
 
         self.controller = control_class(self.ctrl_config)
 
-        self._mpc_loop_hz = 1.0 / float(self.controller.dt)
+        self._mpc_loop_hz = float(self.ctrl_config["ctrl_rate"])
+        if self._mpc_loop_hz <= 0.0:
+            raise ValueError(f"ctrl_rate must be positive, got {self._mpc_loop_hz}")
         # set py logger level
         ch = logging.StreamHandler()
         formatter = logging.Formatter(
@@ -565,7 +567,7 @@ class ControllerROSNode:
         rospy.set_param("/controller_started", True)
         rospy.set_param("/controller_finished", False)
 
-        mpc_period = float(self.controller.dt)
+        mpc_period = 1.0 / self._mpc_loop_hz
         while not self.ctrl_c:
             cycle_t0 = time.perf_counter()
             t = rospy.Time.now().to_sec()

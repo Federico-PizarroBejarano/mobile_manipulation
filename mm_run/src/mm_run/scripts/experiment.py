@@ -133,9 +133,10 @@ def main():
     ub_u = np.asarray(controller.robot.ub_u, dtype=float).reshape(-1)
     dof_mpc = int(controller.DoF)
 
-    # Controller frequency management (one solve per controller.dt of sim time)
-    ctrl_period = float(controller.dt)
+    # Re-solve at ctrl_rate; dt is the OCP step (horizon / dt = N).
+    ctrl_period = 1.0 / float(ctrl_config["ctrl_rate"])
     last_controller_time = -ctrl_period  # Initialize to allow first call
+    lpf_alpha = float(ctrl_config["cmd_vel_lpf"])
 
     # Cached MPC plan interpolators (rebuilt only when controller.control runs).
     plan_interps = None
@@ -187,6 +188,7 @@ def main():
                 kp_use,
                 lb_use,
                 ub_use,
+                lpf_alpha=lpf_alpha,
                 return_diagnostics=True,
             )
         else:
@@ -199,6 +201,7 @@ def main():
                 kp_use,
                 lb_use,
                 ub_use,
+                lpf_alpha=lpf_alpha,
             )
 
         robot.command_velocity(u)

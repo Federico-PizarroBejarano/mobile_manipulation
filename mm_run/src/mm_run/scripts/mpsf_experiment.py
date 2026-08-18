@@ -143,8 +143,8 @@ def run_simulation(
     robot = sim.robot
     u = np.zeros(sim_config["robot"]["dims"]["v"])
 
-    # Controller frequency management (one solve per controller.dt of sim time)
-    ctrl_period = float(controller.dt)
+    # Re-solve at ctrl_rate; dt is the OCP step (horizon / dt = N).
+    ctrl_period = 1.0 / float(ctrl_config["ctrl_rate"])
     last_controller_time = -ctrl_period  # Initialize to allow first call
 
     metrics_collector = MPSFMetricsCollector()

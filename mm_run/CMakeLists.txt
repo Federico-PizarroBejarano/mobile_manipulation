@@ -23,6 +23,7 @@ catkin_install_python(
   PROGRAMS
     src/mm_run/scripts/experiment.py
     src/mm_run/scripts/mpsf_experiment.py
+    src/mm_run/scripts/run_scenario_tests.py
     src/mm_run/scripts/test_joystick.py
     src/mm_run/nodes/sim_ros.py
     src/mm_run/nodes/isaac_sim_ros.py

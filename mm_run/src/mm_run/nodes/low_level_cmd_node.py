@@ -48,6 +48,12 @@ class LowLevelCmdNode:
         self._mpc_dt_cfg = float(self.ctrl_config["dt"])
         self.cmd_vel_type = self.ctrl_config["cmd_vel_type"]
         self.rate_hz = float(self.ctrl_config["cmd_vel_pub_rate"])
+        self.lpf_alpha = float(self.ctrl_config["cmd_vel_lpf"])
+        self.stale_s = float(self.ctrl_config["cmd_vel_stale_s"])
+        if not (0.0 < self.lpf_alpha <= 1.0):
+            raise ValueError(f"cmd_vel_lpf must be in (0, 1], got {self.lpf_alpha}")
+        if self.stale_s <= 0.0:
+            raise ValueError(f"cmd_vel_stale_s must be positive, got {self.stale_s}")
 
         ll = self.ctrl_config.get("low_level_tracking", {})
         self.ll_enabled = bool(ll.get("enabled", False))
@@ -199,7 +205,12 @@ class LowLevelCmdNode:
                     stale = False
                 else:
                     t_elapsed = max(0.0, (now - plan_stamp).to_sec())
-                    if t_elapsed >= horizon_s:
+                    stale_limit = (
+                        min(horizon_s, self.stale_s)
+                        if horizon_s > 0.0
+                        else self.stale_s
+                    )
+                    if t_elapsed >= stale_limit:
                         self.cmd_vel.fill(0.0)
                         out = self.cmd_vel.copy()
                         stale = True
@@ -215,6 +226,7 @@ class LowLevelCmdNode:
                             self.kp_arg,
                             lb_u,
                             ub_u,
+                            lpf_alpha=self.lpf_alpha,
                         )
                         out = self.cmd_vel.copy()
                         stale = False

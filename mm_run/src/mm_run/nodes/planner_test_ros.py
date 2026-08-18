@@ -66,7 +66,9 @@ class ControllerROSNode:
         self.planner_config = config["planner"].copy()
         print("planner config: ", self.planner_config)
 
-        self._mpc_loop_hz = 1.0 / float(self.ctrl_config["dt"])
+        self._mpc_loop_hz = float(self.ctrl_config["ctrl_rate"])
+        if self._mpc_loop_hz <= 0.0:
+            raise ValueError(f"ctrl_rate must be positive, got {self._mpc_loop_hz}")
 
         # set py logger level
         ch = logging.StreamHandler()

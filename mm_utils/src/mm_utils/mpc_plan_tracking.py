@@ -121,6 +121,7 @@ def low_level_velocity_step(
     kp: np.ndarray | None,
     lb_u: np.ndarray | None,
     ub_u: np.ndarray | None,
+    lpf_alpha: float = 1.0,
     return_diagnostics: bool = False,
 ):
     """Feedforward from MPC plan plus optional joint P correction, then clamp.
@@ -129,6 +130,7 @@ def low_level_velocity_step(
     Interpolation mode: ``u_next = v(t_elapsed + mpc_dt)`` from MPC velocity trajectory.
 
     Optional: ``u_next += kp * (q_ref - q)`` using ``q_ref`` from ``q_bar`` horizon.
+    Then ``u_next = alpha * u_next + (1 - alpha) * u_cmd`` if ``lpf_alpha < 1``.
 
     Args:
         u_cmd: Current commanded generalized velocity, shape ``(nu,)``.
@@ -139,6 +141,7 @@ def low_level_velocity_step(
         kp: Optional length-``nu`` gains; None or all-zero disables P term.
         lb_u: Lower velocity bounds, shape ``(nu,)``, or None.
         ub_u: Upper velocity bounds, shape ``(nu,)``, or None.
+        lpf_alpha: Weight on the new sample in ``[0, 1]``. ``1.0`` disables the filter.
 
     Returns:
         np.ndarray: Updated velocity command, shape ``(nu,)``.
@@ -183,6 +186,13 @@ def low_level_velocity_step(
             err = _joint_error_to_nu(q_ref, q_meas, nu)
             out = out + kp * err
 
+    alpha = float(lpf_alpha)
+    if not (0.0 < alpha <= 1.0):
+        raise ValueError(f"lpf_alpha must be in (0, 1], got {alpha}")
+    if alpha < 1.0:
+        prev = np.asarray(u_cmd, dtype=float).reshape(-1)[:nu]
+        out = alpha * out + (1.0 - alpha) * prev
+
     if lb_u is not None and ub_u is not None:
         lb_u = np.asarray(lb_u, dtype=float).reshape(-1)
         ub_u = np.asarray(ub_u, dtype=float).reshape(-1)
@@ -207,6 +217,7 @@ def low_level_velocity_step_simple(
     kp: np.ndarray | None,
     lb_u: np.ndarray | None,
     ub_u: np.ndarray | None,
+    lpf_alpha: float = 1.0,
     return_diagnostics: bool = False,
 ):
     """Convenience: rebuild interpolators each call."""
@@ -220,5 +231,6 @@ def low_level_velocity_step_simple(
         kp,
         lb_u,
         ub_u,
+        lpf_alpha=lpf_alpha,
         return_diagnostics=return_diagnostics,
     )
