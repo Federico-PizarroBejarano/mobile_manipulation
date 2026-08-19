@@ -129,7 +129,9 @@ def low_level_velocity_step(
     Integration mode: ``u_next = u_cmd + u(t_elapsed) * sim_dt`` with ``u`` from MPC.
     Interpolation mode: ``u_next = v(t_elapsed + mpc_dt)`` from MPC velocity trajectory.
 
-    Optional: ``u_next += kp * (q_ref - q)`` using ``q_ref`` from ``q_bar`` horizon.
+    Optional: ``u_next += kp * (q_ref - q)``. Interpolation uses
+    ``q_ref = q(t_elapsed + mpc_dt)`` (same knot as ``v``); integration uses
+    ``q(t_elapsed)``.
     Then ``u_next = alpha * u_next + (1 - alpha) * u_cmd`` if ``lpf_alpha < 1``.
 
     Args:
@@ -149,6 +151,9 @@ def low_level_velocity_step(
         ``v_ff``, ``q_ref`` (or None), ``v_cmd`` (after clamp).
     """
     nu = interps.nu
+    t_cmd = float(t_elapsed)
+    if interps.cmd_vel_type == "interpolation":
+        t_cmd = float(t_elapsed) + interps.mpc_dt
     if interps.cmd_vel_type == "integration":
         if interps.u_interp is None:
             v_ff = np.asarray(u_cmd, dtype=float).reshape(-1)[:nu].copy()
@@ -159,17 +164,13 @@ def low_level_velocity_step(
         if interps.v_interp is None:
             v_ff = np.zeros(nu, dtype=float)
         else:
-            v_ff = np.asarray(
-                interps.v_interp(t_elapsed + interps.mpc_dt), dtype=float
-            ).reshape(-1)[:nu]
+            v_ff = np.asarray(interps.v_interp(t_cmd), dtype=float).reshape(-1)[:nu]
 
     v_ff = np.asarray(v_ff, dtype=float).reshape(-1)[:nu].copy()
     out = v_ff.copy()
     q_ref_diag = None
     if interps.q_interp is not None and interps.dof > 0:
-        q_ref_diag = (
-            np.asarray(interps.q_interp(t_elapsed), dtype=float).reshape(-1).copy()
-        )
+        q_ref_diag = np.asarray(interps.q_interp(t_cmd), dtype=float).reshape(-1).copy()
 
     if kp is not None and interps.q_interp is not None and interps.dof > 0:
         kp = np.asarray(kp, dtype=float).reshape(-1)
@@ -181,7 +182,7 @@ def low_level_velocity_step(
             q_ref = (
                 q_ref_diag
                 if q_ref_diag is not None
-                else np.asarray(interps.q_interp(t_elapsed), dtype=float).reshape(-1)
+                else np.asarray(interps.q_interp(t_cmd), dtype=float).reshape(-1)
             )
             err = _joint_error_to_nu(q_ref, q_meas, nu)
             out = out + kp * err

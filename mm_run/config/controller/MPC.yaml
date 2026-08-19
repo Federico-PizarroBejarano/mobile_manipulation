@@ -15,8 +15,8 @@ controller:
   ros_visualization_rate: 5.0         # Hz; planner/MPC markers (0 disables timer)
 
   low_level_tracking:
-    enabled: false
-    kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    enabled: true
+    kp: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
     log_refs: false   # sim only: log ll_v_ffs, ll_q_refs, ll_v_cmds when enabled
 
   soft_cst: True

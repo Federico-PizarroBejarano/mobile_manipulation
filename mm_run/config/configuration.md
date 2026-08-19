@@ -112,8 +112,8 @@ controller:
   # ROS: controller.launch starts mpc_ros or mpsf_ros (MpcPlan) + low_level_cmd_node (cmd_vel).
   # e.g. via run.launch or: roslaunch mm_run controller.launch config:=...
   low_level_tracking:
-    enabled: false
-    kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # length nu; unused unless enabled
+    enabled: true
+    kp: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]   # length nu; unused unless enabled
     log_refs: false                   # sim: log ll_v_ffs, ll_q_refs, ll_v_cmds
 ```
 
