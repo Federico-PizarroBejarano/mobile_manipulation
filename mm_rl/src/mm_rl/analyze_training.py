@@ -3,8 +3,8 @@
 Command:
 
 ```bash
-cd /home/federico/catkin_ws/src/mobile_manipulation
-python3 mm_rl/analyze_training.py --metrics logs/training_metrics.npz --output logs
+cd ~/catkin_ws/src/mobile_manipulation
+python3 -m mm_rl.analyze_training --metrics logs/training_metrics.npz --output logs
 ```
 """
 

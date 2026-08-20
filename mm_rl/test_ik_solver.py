@@ -16,6 +16,64 @@ import numpy as np
 from mm_rl.env.base_env import BaseRLEnv
 from mm_utils import parsing
 
+# Relative increase vs λ=0 is only meaningful when unregularized error is not ~0.
+_BASELINE_ERROR_EPS = 1e-4
+_REG_ERROR_THRESHOLD = 0.05
+
+
+def format_regularization_impact(
+    results_by_strength, current_strength, error_threshold=_REG_ERROR_THRESHOLD
+):
+    """Build the IK regularization summary (no bogus % when λ=0 error is ~0).
+
+    Args:
+        results_by_strength (dict): Maps λ to a dict with ``mean_error``.
+        current_strength (float): Regularization used by the environment.
+        error_threshold (float): Mean relative error above which we recommend lowering λ.
+
+    Returns:
+        dict: ``current_strength``, ``current_error``, ``no_reg_error``, ``error_increase``,
+        ``relative_increase`` (percent or ``None``), ``recommendation``, ``line``.
+    """
+
+    def _at(lam):
+        target = float(lam)
+        for key, value in results_by_strength.items():
+            if abs(float(key) - target) < 1e-12:
+                return value
+        raise KeyError(f"No sweep result for λ={lam}")
+
+    current_strength = float(current_strength)
+    current_error = float(_at(current_strength)["mean_error"])
+    no_reg_error = float(_at(0.0)["mean_error"])
+    error_increase = current_error - no_reg_error
+    if no_reg_error > _BASELINE_ERROR_EPS:
+        relative_increase = 100.0 * error_increase / no_reg_error
+        line = (
+            f"Current regularization (λ={current_strength:g}) increases error by "
+            f"{error_increase:.4f} ({relative_increase:.1f}%)"
+        )
+    else:
+        relative_increase = None
+        line = (
+            f"Current regularization (λ={current_strength:g}) mean relative error is "
+            f"{current_error:.4f} (absolute increase {error_increase:.4f} vs λ=0)"
+        )
+    recommendation = (
+        "Consider reducing regularization strength"
+        if current_error > error_threshold
+        else "Current strength seems reasonable"
+    )
+    return {
+        "current_strength": current_strength,
+        "current_error": current_error,
+        "no_reg_error": no_reg_error,
+        "error_increase": error_increase,
+        "relative_increase": relative_increase,
+        "recommendation": recommendation,
+        "line": line,
+    }
+
 
 def _sample_uniform_ball(radius, dim=3):
     """Uniform sample inside a ``dim``-dimensional Euclidean ball of given radius.
@@ -369,7 +427,7 @@ def test_regularization_strength_impact(env, n_tests=50):
 
     Returns:
         dict: Keys ``passed`` (always True), ``results_by_strength`` (dict keyed by λ),
-        ``current_error``, ``no_reg_error`` (mean relative errors at λ=0.1 vs 0).
+        ``current_error``, ``no_reg_error`` (mean relative errors at configured λ vs 0).
     """
     print(f"\n{'='*80}")
     print("Test 4: Regularization Strength Impact")
@@ -379,8 +437,8 @@ def test_regularization_strength_impact(env, n_tests=50):
     original_strength = env.ik_regularization_strength
     original_use_weighted = env.use_weighted_regularization
 
-    # Test different regularization strengths
-    reg_strengths = [0.0, 0.01, 0.05, 0.1, 0.2]
+    # Test different regularization strengths, always including the configured λ
+    reg_strengths = sorted({0.0, 0.01, 0.05, 0.1, 0.2, float(original_strength)})
     results_by_strength = {}
 
     for reg_strength in reg_strengths:
@@ -423,17 +481,12 @@ def test_regularization_strength_impact(env, n_tests=50):
             f"  λ={reg_strength:4.2f}: Mean error = {r['mean_error']:.4f} ± {r['std_error']:.4f} (max: {r['max_error']:.4f})"
         )
 
-    # Check if current strength (0.1) is causing excessive error
-    current_error = results_by_strength[0.1]["mean_error"]
-    no_reg_error = results_by_strength[0.0]["mean_error"]
-    error_increase = current_error - no_reg_error
+    summary = format_regularization_impact(results_by_strength, original_strength)
+    current_error = summary["current_error"]
+    no_reg_error = summary["no_reg_error"]
 
-    print(
-        f"\n  Current regularization (λ=0.1) increases error by {error_increase:.4f} ({100*error_increase/(no_reg_error+1e-8):.1f}%)"
-    )
-    print(
-        f"  Recommendation: {'Consider reducing regularization strength' if current_error > 0.05 else 'Current strength seems reasonable'}"
-    )
+    print(f"\n  {summary['line']}")
+    print(f"  Recommendation: {summary['recommendation']}")
 
     return {
         "passed": True,  # Informational test
@@ -456,7 +509,7 @@ def test_numerical_stability(env, n_tests=50):
         dict: Keys ``passed`` (bool), ``n_issues``, ``issues`` (list of problem strings).
     """
     print(f"\n{'='*80}")
-    print("Test 4: Numerical Stability")
+    print("Test 5: Numerical Stability")
     print(f"{'='*80}")
     print(f"Running {n_tests} edge case tests...")
 
@@ -527,8 +580,49 @@ def test_numerical_stability(env, n_tests=50):
     return {"passed": passed, "n_issues": len(issues), "issues": issues}
 
 
+def test_regularization_summary_uses_configured_lambda():
+    """Summary must report the env λ, not a hardcoded 0.1."""
+    results = {
+        0.0: {"mean_error": 0.0},
+        0.05: {"mean_error": 0.0282},
+        0.1: {"mean_error": 0.0556},
+    }
+    summary = format_regularization_impact(results, current_strength=0.05)
+    assert summary["current_strength"] == 0.05
+    assert summary["current_error"] == 0.0282
+    assert "λ=0.05" in summary["line"]
+    assert "λ=0.1" not in summary["line"]
+    assert summary["recommendation"] == "Current strength seems reasonable"
+
+
+def test_regularization_summary_skips_percent_when_baseline_is_zero():
+    """λ=0 tracking error is ~0, so a relative % vs that baseline is meaningless."""
+    results = {
+        0.0: {"mean_error": 0.0},
+        0.05: {"mean_error": 0.0282},
+    }
+    summary = format_regularization_impact(results, current_strength=0.05)
+    assert "%" not in summary["line"]
+    assert summary["relative_increase"] is None
+    assert "0.0282" in summary["line"]
+
+
+def test_regularization_summary_includes_percent_when_baseline_is_nonzero():
+    results = {
+        0.0: {"mean_error": 0.02},
+        0.1: {"mean_error": 0.06},
+    }
+    summary = format_regularization_impact(results, current_strength=0.1)
+    assert abs(summary["relative_increase"] - 200.0) < 1e-6
+    assert "200.0%" in summary["line"]
+    assert summary["recommendation"] == "Consider reducing regularization strength"
+
+
 def main():
     """CLI: build :class:`BaseRLEnv` from config and run all IK diagnostic tests."""
+    test_regularization_summary_uses_configured_lambda()
+    test_regularization_summary_skips_percent_when_baseline_is_zero()
+    test_regularization_summary_includes_percent_when_baseline_is_nonzero()
     parser = argparse.ArgumentParser(description="Test IK solver functionality")
     parser.add_argument(
         "-c",

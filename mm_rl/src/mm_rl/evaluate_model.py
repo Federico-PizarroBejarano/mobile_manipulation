@@ -1,7 +1,7 @@
 """Evaluate RL checkpoint and optionally compare to MPSF on identical goals.
 
 ```bash
-cd /home/federico/catkin_ws/src/mobile_manipulation
+cd ~/catkin_ws/src/mobile_manipulation
 python3 -m mm_rl.evaluate_model -c mm_rl/config/train_config.yaml \\
   --checkpoint checkpoints/final_model.pth --n-episodes 10 --seed 3
 
