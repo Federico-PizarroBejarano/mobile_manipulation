@@ -2,9 +2,24 @@ import casadi as cs
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation as Rot
+from scipy.spatial.transform import Slerp
 from spatialmath.base import q2r, qunit, r2q
 
 QUAT_ORDER = "xyzs"
+
+
+def quat_orientation_error(q_achieved, q_desired):
+    """Orientation error between two unit quaternions.
+
+    Args:
+        q_achieved (ndarray): Achieved orientation quaternion, shape (4,).
+        q_desired (ndarray): Desired orientation quaternion, shape (4,).
+
+    Returns:
+        float: Orientation error.
+    """
+    q_dot = np.abs(np.dot(np.asarray(q_achieved), np.asarray(q_desired)))
+    return 1.0 - q_dot**2
 
 
 def quat_to_rot(q):
@@ -89,6 +104,135 @@ def quat_inverse(q):
         ndarray: Inverse quaternion, shape (4,).
     """
     return np.append(-q[:3], q[3])
+
+
+def quat_normalize(q):
+    """Normalize quaternion.
+
+    Args:
+        q (ndarray): Quaternion, shape (4,).
+
+    Returns:
+        ndarray: Normalized quaternion, shape (4,).
+    """
+    q = np.asarray(q, dtype=np.float64).reshape(4)
+    n = np.linalg.norm(q)
+    return q / (n + 1e-12)
+
+
+def quat_slerp(q0, q1, t):
+    """Slerp between two quaternions.
+
+    Args:
+        q0 (ndarray): First quaternion, shape (4,).
+        q1 (ndarray): Second quaternion, shape (4,).
+        t (float): Interpolation parameter, in [0, 1].
+
+    Returns:
+        ndarray: Interpolated quaternion, shape (4,).
+    """
+    t = float(np.clip(t, 0.0, 1.0))
+    q0 = quat_normalize(q0)
+    q1 = quat_normalize(q1)
+    r0 = Rot.from_quat(q0)
+    r1 = Rot.from_quat(q1)
+    key_rots = Rot.concatenate([r0, r1])
+    slerp = Slerp([0.0, 1.0], key_rots)
+    return np.asarray(slerp([t]).as_quat(), dtype=np.float64).reshape(4)
+
+
+def omega_from_quat_step(q0, q1, dt):
+    """Compute angular velocity from quaternion step.
+
+    Args:
+        q0 (ndarray): First quaternion, shape (4,).
+        q1 (ndarray): Second quaternion, shape (4,).
+        dt (float): Time step, in seconds.
+
+    Returns:
+        ndarray: Angular velocity, shape (3,).
+    """
+    if dt < 1e-12:
+        return np.zeros(3)
+    R0 = quat_to_rot(quat_normalize(q0))
+    R1 = quat_to_rot(quat_normalize(q1))
+    R_rel = R1 @ R0.T
+    rotvec = Rot.from_matrix(R_rel).as_rotvec()
+    return rotvec / dt
+
+
+def clamp_ee_velocity(ee_vel, max_linear_speed, max_angular_speed):
+    """Clamp 6D EE twist by linear and angular norm limits.
+
+    Args:
+        ee_vel (ndarray): [vx, vy, vz, wx, wy, wz]
+        max_linear_speed (float): Max norm for linear part (m/s)
+        max_angular_speed (float): Max norm for angular part (rad/s)
+
+    Returns:
+        ndarray: Clamped twist, shape (6,)
+    """
+    v = np.asarray(ee_vel, dtype=np.float64).copy()
+    lin_n = np.linalg.norm(v[:3])
+    if lin_n > max_linear_speed:
+        v[:3] = v[:3] / lin_n * max_linear_speed
+    ang_n = np.linalg.norm(v[3:])
+    if ang_n > max_angular_speed:
+        v[3:] = v[3:] / ang_n * max_angular_speed
+    return v
+
+
+def angular_velocity_world_to_body(omega_w, q_wb):
+    """Express angular velocity in the body (EE) frame.
+
+    ``q_wb`` is a unit quaternion in ``QUAT_ORDER`` (xyzs body→world) such that
+    ``v_world = R_wb @ v_body``. Then ``omega_body = R_wb.T @ omega_world``.
+
+    This matches the angular block of the tool spatial Jacobian in ``mm_control``
+    (built from ``R.T @ dR/dq``).
+
+    Args:
+        omega_w (ndarray): Angular velocity in world frame, shape (3,).
+        q_wb (ndarray): Body→world quaternion, shape (4,).
+
+    Returns:
+        ndarray: Angular velocity in body frame, shape (3,).
+    """
+    return quat_rotate(
+        quat_inverse(np.asarray(q_wb, dtype=np.float64).reshape(4)), omega_w
+    )
+
+
+def ee_twist_world_and_mpc_reference(
+    desired_lin_w, desired_ang_w, q_tool_wb, clamp_limits=None
+):
+    """World-frame planner twist for IK vs MPC ``EEVel`` reference.
+
+    The planner returns linear and angular velocity in the world frame. The MPC
+    end-effector velocity cost uses world linear velocity and **body-frame**
+    angular velocity (matching the tool spatial Jacobian). This returns both
+    the full world twist (for Jacobian IK) and the 6D vector to pass as
+    ``desired_velocity['ee_velocity']``.
+
+    Args:
+        desired_lin_w (ndarray): Linear velocity in world frame, shape (3,).
+        desired_ang_w (ndarray): Angular velocity in world frame, shape (3,).
+        q_tool_wb (ndarray): Tool body→world quaternion, shape (4,).
+        clamp_limits: If set, ``(max_linear_speed, max_angular_speed)`` for
+            :func:`clamp_ee_velocity` on the world twist before the conversion.
+
+    Returns:
+        tuple: ``(desired_ee_vel_world, desired_ee_vel_mpc)``, each shape (6,).
+    """
+    lin = np.asarray(desired_lin_w, dtype=np.float64).reshape(3)
+    ang_w = np.asarray(desired_ang_w, dtype=np.float64).reshape(3)
+    tw = np.concatenate([lin, ang_w])
+    if clamp_limits is not None:
+        max_l, max_a = clamp_limits
+        tw = clamp_ee_velocity(tw, float(max_l), float(max_a))
+    ang_b = angular_velocity_world_to_body(tw[3:], q_tool_wb)
+    mpc = np.concatenate([tw[:3], ang_b])
+    return tw, mpc
 
 
 def make_trans_from_vec(rotvec, pos):

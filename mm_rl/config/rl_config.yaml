@@ -1,0 +1,76 @@
+# RL Training Configuration (N²M² paper-aligned where noted)
+
+rl:
+  max_steps: 500000  # Total training steps (paper: 10e6)
+  start_steps: 10000  # Random actions before training starts
+  update_after: 1000  # Start updating networks after N steps
+  update_freq: 1  # Update networks every N steps
+  eval_freq: 10000  # Frequency of evaluation episodes
+  save_freq: 50000  # Frequency of checkpoint saving
+
+  sac:
+    lr: 1.0e-4  # Learning rate (paper: 1e-4)
+    gamma: 0.99  # Discount factor (paper: 0.99)
+    tau: 0.001  # Soft update coefficient for target networks (paper: 1e-3)
+    alpha: 0.2  # Initial entropy coefficient (if not auto-tuning)
+    auto_alpha: true  # Automatically tune entropy coefficient
+    batch_size: 256  # Batch size for training (paper: 256)
+    hidden_layers: [512, 512, 256]  # Units per layer (paper: [512, 512, 256])
+    buffer_size: 100000  # Replay buffer capacity (paper: 10e5)
+    infinite_horizon: true  # N²M² paper: infinite horizon with bootstrapping at episode end
+
+# Goal generation parameters
+goal:
+  pos_range:  # Goal position range [min, max] for [x, y, z] in meters
+    - [-1.0, -1.0, 0.7]
+    - [1.0, 1.0, 1.0]
+  orn_range: 3.14  # Goal orientation range in radians
+  success_pos_threshold: 0.1  # Position success threshold in meters
+  success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
+
+# Reward parameters (IK: modulation_rl-style normalized L2, -0.5 when at pos_scale/rot_scale)
+reward:
+  ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik)
+  pos_scale: 0.1   # Position normalization (m), same as modulation_rl ikslack_dist
+  rot_scale: 0.05  # Rotation normalization, same as modulation_rl ikslack_rot_dist
+  acceleration_penalty_multiplier: 0.05
+  base_action_penalty_multiplier: 0.05
+
+# Simulation parameters (can be overridden by including simulation config)
+simulation:
+  max_episode_steps: 1000  # Maximum steps per episode
+  timestep: 0.03
+  duration: 25.0
+  gravity: [0, 0, -9.81]
+  gui: false
+
+  static_obstacles:
+    enabled: false
+
+  dynamic_obstacles:
+    enabled: false
+
+  robot:
+    home: [-1.5, 0.0, 0, 1.5708, -0.7854,  1.5708, -0.7854,  1.5708, 1.3100]
+
+# Early termination (modulation_rl-style: slack + cumulative count, no reset when back within slack)
+termination:
+  slack_pos_threshold: 0.1   # Step counts as failure if pos deviation > this (m)
+  slack_rot_threshold: 0.05  # Step counts as failure if rot deviation > this
+  ik_fail_thresh: 20         # Terminate when total failure steps >= this
+
+# IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
+ik:
+  regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
+  use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
+
+# Planner parameters
+planner:
+  max_linear_speed: 0.08  # m/s; caps mean linear speed along the position segment of the path
+
+# Robot speed override (~modulation_rl: base_vel_rng 0.2 m/s, base_rot_rng 0.75 rad/s)
+robot:
+  base_linear_vel_limit: 0.4   # m/s
+  base_angular_vel_limit: 0.75  # rad/s
+  ee_linear_vel_limit: 0.5     # m/s clamp before IK
+  ee_angular_vel_limit: 0.75   # rad/s clamp before IK

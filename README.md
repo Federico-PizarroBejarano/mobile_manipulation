@@ -1,10 +1,11 @@
 # Mobile Manipulation
-A ROS-based framework for mobile manipulation research, featuring MPC-based control, robot simulation, and planning utilities.
+A ROS-based framework for mobile manipulation research, featuring MPC-based control, robot simulation, planning utilities, and N²M²-style RL for base motion.
 
 ## Package Overview
 - **mm_assets**: Robot and scene URDF/mesh files
 - **mm_control**: MPC controller implementation using Acados
 - **mm_plan**: Planning base classes and simple planners
+- **mm_rl**: SAC training for N²M²-style base control given a scripted EE planner
 - **mm_run**: Launch files, configurations, and ROS nodes/scripts
 - **mm_simulator**: PyBullet simulation interface
 - **mm_utils**: Utility functions for math, parsing, logging, etc.
@@ -51,13 +52,13 @@ export LD_LIBRARY_PATH=<your_acados_install>/lib:$LD_LIBRARY_PATH
 cd ~/catkin_ws/src
 git clone https://github.com/utiasDSL/mobile_manipulation
 cd ~/catkin_ws
-catkin build mm_assets mm_utils mm_simulator mm_plan mm_control mm_run
+catkin build mm_assets mm_utils mm_simulator mm_plan mm_control mm_run mm_rl
 source devel/setup.bash
 python3 -m pip install -r src/mobile_manipulation/requirements.txt
 ```
 
 ## Usage
-Commands below assume the workspace is sourced (`source ~/catkin_ws/devel/setup.bash`).
+Commands below assume the workspace is sourced (`source ~/catkin_ws/devel/setup.bash`). Scripts live under `mm_run/src/mm_run/` and are invoked with `rosrun` after a catkin build.
 
 ### Compile MPC Controller
 ```bash
@@ -104,6 +105,63 @@ roslaunch mm_run run_isaac_sim.launch config:=$(rospack find mm_run)/config/3d_c
 
 (`isaac_sim.launch` starts only the Isaac sim node; prefer `run_isaac_sim.launch` for sim + MPC.)
 
+### RL Training and Evaluation
+Train a SAC policy that commands only the mobile base while a scripted EE planner provides desired end-effector velocities:
+
+```bash
+cd ~/catkin_ws/src/mobile_manipulation
+python3 -m mm_rl.train -c mm_rl/config/train_config.yaml --checkpoint_dir checkpoints --log_dir logs
+```
+
+Evaluate a checkpoint (optionally against MPSF on the same goals):
+
+```bash
+python3 -m mm_rl.evaluate_model -c mm_rl/config/train_config.yaml \
+  --checkpoint checkpoints/final_model.pth --n-episodes 10 --seed 3
+
+python3 -m mm_rl.evaluate_model -c mm_rl/config/train_config.yaml \
+  --checkpoint checkpoints/final_model.pth --compare-mpsf --seed 3 --n-episodes 5
+```
+
+## Tests
+From the repository root, with the workspace sourced.
+
+EE planner unit tests (no simulation):
+
+```bash
+python3 mm_rl/test_ee_planner_path.py
+```
+
+IK solver used by the RL environment:
+
+```bash
+python3 mm_rl/test_ik_solver.py -c mm_rl/config/train_config.yaml
+```
+
+EE planner as faux teleoperator with MPSF tracking:
+
+```bash
+python3 mm_rl/test_ee_planner_mpsf.py -c mm_rl/config/train_config.yaml --n-episodes 5
+python3 mm_rl/test_ee_planner_mpsf.py -c mm_rl/config/train_config.yaml --n-episodes 5 --use-ik-solver
+```
+
+MPC / upright scenario suite (sync PyBullet or ROS):
+
+```bash
+rosrun mm_run run_scenario_tests.py --mode pybullet
+rosrun mm_run run_scenario_tests.py
+```
+
+Inherited MPC scenario configs (run individually):
+
+```bash
+rosrun mm_run experiment.py --config $(rospack find mm_run)/config/tests/test_position_only.yaml
+rosrun mm_run experiment.py --config $(rospack find mm_run)/config/tests/test_orientation_only.yaml
+rosrun mm_run experiment.py --config $(rospack find mm_run)/config/tests/test_complex_waypoints.yaml
+rosrun mm_run experiment.py --config $(rospack find mm_run)/config/tests/test_path_planning.yaml
+rosrun mm_run experiment.py --config $(rospack find mm_run)/config/tests/test_upright_payload.yaml
+```
+
 ## Configuration
 Configuration files are located in `mm_run/config/`. Key configuration options include:
 
@@ -112,3 +170,4 @@ Configuration files are located in `mm_run/config/`. Key configuration options i
 - **Controller**: MPC parameters (`config/controller/`)
 - **Simulation**: Simulation settings (`config/sim/`)
 - **Tests / experiments**: Example and integration configs (`config/tests/`, `config/mpsf_experiments/`, `simple_experiment.yaml`)
+- **RL**: Training and evaluation configs (`mm_rl/config/`)
