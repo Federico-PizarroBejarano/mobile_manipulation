@@ -16,11 +16,13 @@ casadi_c*
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
 
 # Results/output data
 results/
 checkpoints/
 logs/
+eval_results/
 
 # Cursor Docs
 docs/

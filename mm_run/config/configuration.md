@@ -394,22 +394,6 @@ simulation:
     color: [r, g, b, a]                  # RGBA in [0, 1]
 ```
 
-### Cameras (Isaac Sim)
-
-```yaml
-simulation:
-  cameras:
-    - name: str
-      type: "RGBCamera" | "ToFCamera"
-      prim_path: str
-      params:
-        package: str
-        path: str
-      translation: [x, y, z]
-      orientation: [w, x, y, z]
-      ros_topic_name_space: str
-```
-
 ## Scene
 
 Scene configuration for static obstacles (typically included from `config/scene/`):

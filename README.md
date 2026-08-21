@@ -96,15 +96,6 @@ roscd mm_utils/scripts
 python3 plot_logs.py --folder ../../mm_run/results/[EXPERIMENT_NAME]/[TIMESTAMP] --tracking
 ```
 
-### Isaac Sim (Optional)
-If using Isaac Sim, ensure [mm_sim_isaac](https://github.com/TracyDuX/mm_sim_isaac) is installed. Full stack (sim + controller):
-
-```bash
-roslaunch mm_run run_isaac_sim.launch config:=$(rospack find mm_run)/config/3d_collision.yaml isaac-venv:=$ISAACSIM_PYTHON_EXE_1
-```
-
-(`isaac_sim.launch` starts only the Isaac sim node; prefer `run_isaac_sim.launch` for sim + MPC.)
-
 ### RL Training and Evaluation
 Train a SAC policy that commands only the mobile base while a scripted EE planner provides desired end-effector velocities:
 

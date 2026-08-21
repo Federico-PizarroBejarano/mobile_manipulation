@@ -26,10 +26,8 @@ catkin_install_python(
     src/mm_run/scripts/run_scenario_tests.py
     src/mm_run/scripts/test_joystick.py
     src/mm_run/nodes/sim_ros.py
-    src/mm_run/nodes/isaac_sim_ros.py
     src/mm_run/nodes/mpc_ros.py
     src/mm_run/nodes/low_level_cmd_node.py
     src/mm_run/nodes/mpsf_ros.py
-    src/mm_run/nodes/planner_test_ros.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
