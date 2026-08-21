@@ -28,7 +28,3 @@ docs/
 # Python Egg
 *.egg
 *.egg-info/
-
-# pixi environments
-.pixi/*
-!.pixi/config.toml
