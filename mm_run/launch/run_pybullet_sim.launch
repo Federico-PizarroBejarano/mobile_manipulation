@@ -7,6 +7,8 @@
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
   <arg name="teleop" default="none" doc="direct|mpsf|none — which plan publisher to run"/>
+  <arg name="record_bag" default="false" doc="record rosbag on Square/Enter start, stop on Square/shutdown"/>
+  <arg name="bag_all" default="false" doc="if true, record all topics (trial_all.bag) instead of curated set"/>
   <arg name="gui" default="false" doc="Enable PyBullet GUI"/>
 
   <!-- Simulation -->

@@ -171,6 +171,22 @@ Stick teleop requires `controller.teleop.enabled: true`. Gate param: `/teleop_st
 If sticks move but nothing happens, check the warn log for `pressed buttons=[...]`.
 You need `13` (d-pad up) in that list.
 
+## Logging and rosbags
+
+Each trial writes under `mm_run/results/<log_dir>/<timestamp>/`:
+- `control/data.npz` — states, joy, desired twists, `u_cmd`, (MPSF) `mpc_*`
+- `metrics/metrics.npz` + `summary.txt`
+- `bag/trial.bag` (or `trial_all.bag` if `bag_all:=true`)
+
+Hardware: `record_bag` defaults true. Sim: false unless passed.
+Bag starts on Square/Enter and stops on Square/shutdown.
+
+Launch overrides:
+```bash
+roslaunch mm_run hardware_teleop.launch record_bag:=false
+roslaunch mm_run run_pybullet_sim.launch config:=... record_bag:=true bag_all:=true
+```
+
 ## Configuration Parameters
 All config files support:
 - `deadzone`: Minimum value before joystick input is registered (default: 0.1)

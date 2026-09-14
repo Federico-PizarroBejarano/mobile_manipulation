@@ -14,6 +14,8 @@
   <arg name="joy_dev" default="$(optenv RIDGEBACK_JOY_DEVICE /dev/input/js0)"/>
   <arg name="joystick" default="false" doc="start mm_run joy_node; leave false if /bluetooth_teleop/joy already exists"/>
   <arg name="launch_robot" default="false" doc="if true, also launch thing.launch"/>
+  <arg name="record_bag" default="true" doc="record rosbag on Square/Enter start, stop on Square/shutdown"/>
+  <arg name="bag_all" default="false" doc="if true, record all topics (trial_all.bag) instead of curated set"/>
 
   <include if="$(arg launch_robot)" file="$(find mobile_manipulation_central)/launch/thing.launch"/>
 
@@ -29,5 +31,7 @@
     <arg name="planner_config" value="$(arg planner_config)"/>
     <arg name="logging_sub_folder" value="$(arg logging_sub_folder)"/>
     <arg name="teleop" value="$(arg teleop)"/>
+    <arg name="record_bag" value="$(arg record_bag)"/>
+    <arg name="bag_all" value="$(arg bag_all)"/>
   </include>
 </launch>

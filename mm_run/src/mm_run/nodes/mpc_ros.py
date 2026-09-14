@@ -1,6 +1,5 @@
 import argparse
 import copy
-import datetime
 import logging
 import os
 import sys
@@ -41,6 +40,13 @@ from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
     toggle_gripper_open,
+)
+from mm_utils.teleop_session_logging import (
+    TrialBagRecorder,
+    append_teleop_sample,
+    clear_experiment_timestamp,
+    resolve_experiment_timestamp,
+    session_root,
 )
 
 
@@ -128,15 +134,21 @@ class ControllerROSNode:
         self.logger.add("nu", self.ctrl_config["robot"]["dims"]["u"])
         self._nu_cmd = int(self.ctrl_config["robot"]["dims"]["u"])
 
-        # Shared timestamp from sim_ros when running with the simulator.
-        # On the real robot there is no sim node, so generate one locally.
-        if rospy.has_param("/experiment_timestamp"):
-            self.session_timestamp = rospy.get_param("/experiment_timestamp")
-        else:
-            self.session_timestamp = datetime.datetime.now().strftime(
-                "%Y-%m-%d_%H-%M-%S"
-            )
-            rospy.set_param("/experiment_timestamp", self.session_timestamp)
+        # Shared timestamp with sim_ros when present. Never overwrite an existing
+        # param (avoids split sim/ vs control/ folders).
+        self.session_timestamp = resolve_experiment_timestamp(create=True)
+
+        record_bag = rospy.get_param(
+            "~record_bag", rospy.get_param("/mm_run/record_bag", False)
+        )
+        bag_all = rospy.get_param("~bag_all", rospy.get_param("/mm_run/bag_all", False))
+        self.bag_recorder = TrialBagRecorder(
+            session_root(self.logger.base_directory, self.session_timestamp),
+            record_bag=record_bag,
+            bag_all=bag_all,
+            tool_vicon_name=self.ctrl_config["robot"]["tool_vicon_name"],
+            plan_topic=rospy.resolve_name("mpc_plan"),
+        )
 
         # ROS Related
         self.robot_interface = MobileManipulatorROSInterface()
@@ -237,7 +249,22 @@ class ControllerROSNode:
     def shutdownhook(self):
         self.ctrl_c = True
         self.robot_interface.brake()
+        self.bag_recorder.stop()
         self.logger.save(session_timestamp=self.session_timestamp)
+        clear_experiment_timestamp()
+
+    def _sync_session_timestamp(self):
+        """Re-read shared stamp (sim may set it after our __init__)."""
+        ts = resolve_experiment_timestamp(create=True)
+        if ts == self.session_timestamp:
+            return
+        rospy.loginfo(
+            "Adopting experiment timestamp %s (was %s)", ts, self.session_timestamp
+        )
+        self.session_timestamp = ts
+        self.bag_recorder.session_root = session_root(
+            self.logger.base_directory, self.session_timestamp
+        )
 
     def _on_odometry_for_guard(self, msg: Odometry):
         tw = msg.twist.twist
@@ -655,6 +682,13 @@ class ControllerROSNode:
             rospy.Timer(rospy.Duration.from_sec(viz_period), self._publish_planner_data)
 
         self._wait_for_start(rate)
+        self._sync_session_timestamp()
+
+        self.bag_recorder.start()
+        if self.bag_recorder.last_error is not None:
+            rospy.logwarn(
+                "rosbag record failed to start: %s", self.bag_recorder.last_error
+            )
 
         self.sot.activatePlanners()
         t = rospy.Time.now().to_sec()
@@ -664,10 +698,16 @@ class ControllerROSNode:
         # Signal that controller has started (for simulation timing)
         rospy.set_param("/controller_started", True)
         rospy.set_param("/controller_finished", False)
+        self.controller_log.info(
+            "Controller started (session %s)", self.session_timestamp
+        )
 
         mpc_period = 1.0 / self._mpc_loop_hz
+        previous_cycle_t0 = time.perf_counter()
         while not self.ctrl_c:
             cycle_t0 = time.perf_counter()
+            cycle_period = cycle_t0 - previous_cycle_t0
+            previous_cycle_t0 = cycle_t0
             t = rospy.Time.now().to_sec()
 
             # Match experiment.py: one line per control tick (MPC + ROS overhead).
@@ -748,24 +788,22 @@ class ControllerROSNode:
 
             # Update Task Manager
             # Convert to pose arrays in world frame
+            tool_name = self.robot.tool_link_name
+            spatial_jac_key = tool_name + "_spatial"
+            if spatial_jac_key in self.robot.jacSymMdls:
+                J_spatial = self.robot.jacSymMdls[spatial_jac_key](robot_states[0])
+                ee_vel = (J_spatial @ robot_states[1]).toarray().flatten()
+            else:
+                # Fallback: use position Jacobian and pad angular velocity with zeros.
+                J_pos = self.robot.jacSymMdls[tool_name](robot_states[0])
+                ee_lin_vel = (J_pos @ robot_states[1]).toarray().flatten()
+                ee_vel = np.hstack([ee_lin_vel, np.zeros(3)])
+
             if self.use_vicon_tool_data:
                 ee_pos = self.vicon_tool_interface.position
                 ee_quat = self.vicon_tool_interface.orientation
-                # For Vicon data, velocity is not directly available, set to zeros
-                ee_vel = np.zeros(6)
             else:
                 ee_pos, ee_quat = self.robot.getEE(robot_states[0])
-                # Compute EE velocity using spatial Jacobian if available
-                tool_name = self.robot.tool_link_name
-                spatial_jac_key = tool_name + "_spatial"
-                if spatial_jac_key in self.robot.jacSymMdls:
-                    J_spatial = self.robot.jacSymMdls[spatial_jac_key](robot_states[0])
-                    ee_vel = (J_spatial @ robot_states[1]).toarray().flatten()
-                else:
-                    # Fallback: use position Jacobian and pad with zeros for angular velocity
-                    J_pos = self.robot.jacSymMdls[tool_name](robot_states[0])
-                    ee_lin_vel = (J_pos @ robot_states[1]).toarray().flatten()
-                    ee_vel = np.hstack([ee_lin_vel, np.zeros(3)])
 
             ee_euler = Rot.from_quat(ee_quat).as_euler("xyz")
             ee_pose = np.hstack([ee_pos, ee_euler])
@@ -811,7 +849,20 @@ class ControllerROSNode:
             )
 
             # log
-            self.logger.append("ts", t)
+            teleop_fields = self._teleop_log_fields()
+            append_teleop_sample(
+                self.logger,
+                ts=t,
+                q=robot_states[0],
+                v=robot_states[1],
+                base_pose=states["base"]["pose"],
+                base_vel=states["base"]["velocity"],
+                ee_pose=states["EE"]["pose"],
+                ee_vel=states["EE"]["velocity"],
+                u_cmd=u_for_hook,
+                cycle_period=cycle_period,
+                **teleop_fields,
+            )
             self.log_mpc_info(self.logger, self.controller)
             self.logger.append("controller_run_time", tc2 - tc1)
             r_ew_wd = None
@@ -865,6 +916,8 @@ class ControllerROSNode:
                 break
 
             self._end_mpc_cycle(cycle_t0, mpc_period, rate)
+
+        self.bag_recorder.stop()
 
     def _wait_for_start(self, rate):
         """Start on Square (controller) and/or Enter when a TTY is available.
@@ -1014,6 +1067,17 @@ class ControllerROSNode:
             robot_states (tuple): The robot states.
         """
         pass
+
+    def _teleop_log_fields(self):
+        """Return neutral shared logging fields for non-teleop MPC runs."""
+        return {
+            "joy_axes": np.zeros(6),
+            "joy_buttons": np.zeros(16),
+            "teleop_mode": "none",
+            "teleop_enabled": False,
+            "desired_base_vel": np.zeros(3),
+            "desired_ee_vel": np.zeros(6),
+        }
 
     def _after_control_step(self, t, robot_states, states, references, u_current):
         """Hook method called after each control step, before logging.

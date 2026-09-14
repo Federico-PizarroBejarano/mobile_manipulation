@@ -19,6 +19,7 @@ from mm_utils.teleop_joy import (
     store_joy_axes,
     teleop_enable_held,
 )
+from mm_utils.teleop_session_logging import session_root
 
 
 class MPSFControllerROSNode(ControllerROSNode):
@@ -47,6 +48,7 @@ class MPSFControllerROSNode(ControllerROSNode):
         self._sticks_active_param = True
 
         self.metrics_collector = MPSFMetricsCollector()
+        self._metrics_saved = False
         self._current_references = None
         self._current_desired_base_vel = None
         self._current_desired_ee_vel = None
@@ -264,18 +266,71 @@ class MPSFControllerROSNode(ControllerROSNode):
 
         self._current_references = references
 
+    def _teleop_log_fields(self):
+        with self.joy_lock:
+            joy_axes = self.joy_axes.copy()
+            joy_buttons = self.joy_buttons.copy()
+
+        desired_base_vel = (
+            np.zeros(3)
+            if self._current_desired_base_vel is None
+            else np.asarray(self._current_desired_base_vel, dtype=float).copy()
+        )
+        desired_ee_vel = (
+            np.zeros(6)
+            if self._current_desired_ee_vel is None
+            else np.asarray(self._current_desired_ee_vel, dtype=float).copy()
+        )
+        return {
+            "joy_axes": joy_axes,
+            "joy_buttons": joy_buttons,
+            "teleop_mode": self.teleop_control_mode,
+            "teleop_enabled": bool(self.teleop_enabled and self._teleop_enable_active),
+            "desired_base_vel": desired_base_vel,
+            "desired_ee_vel": desired_ee_vel,
+        }
+
     def _after_control_step(self, t, robot_states, states, references, u_current):
         if self._current_references is not None:
+            metrics_enabled = bool(self.teleop_enabled and self._teleop_enable_active)
+            metric_desired_base = (
+                self._current_desired_base_vel if metrics_enabled else None
+            )
+            metric_desired_ee = (
+                self._current_desired_ee_vel if metrics_enabled else None
+            )
             self.metrics_collector.update(
                 self._current_references,
                 states,
                 u_current,
-                self._current_desired_base_vel,
-                self._current_desired_ee_vel,
+                metric_desired_base,
+                metric_desired_ee,
                 self.controller,
                 robot_states,
                 self._sim_timestep,
+                teleop_mode=self.teleop_control_mode,
+                teleop_enabled=metrics_enabled,
+                measured_base_vel=states["base"]["velocity"],
+                measured_ee_vel=states["EE"]["velocity"],
+                dt=1.0 / self._mpc_loop_hz,
             )
+
+    def shutdownhook(self):
+        super().shutdownhook()
+        self._save_metrics()
+
+    def _save_metrics(self):
+        if self._metrics_saved:
+            return
+        metrics_dir = (
+            session_root(self.logger.base_directory, self.session_timestamp) / "metrics"
+        )
+        try:
+            self.metrics_collector.save(metrics_dir)
+            self.metrics_collector.print_summary()
+            self._metrics_saved = True
+        except Exception as exc:
+            rospy.logerr("Failed to save MPSF metrics: %s", exc)
 
 
 if __name__ == "__main__":
@@ -283,4 +338,4 @@ if __name__ == "__main__":
 
     node = MPSFControllerROSNode()
     node.run()
-    node.metrics_collector.print_summary()
+    node._save_metrics()

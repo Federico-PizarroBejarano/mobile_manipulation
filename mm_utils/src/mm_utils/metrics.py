@@ -4,6 +4,8 @@ This module provides functions and classes for collecting, computing, and printi
 metrics during MPSF (Model Predictive Shared Framework) experiments.
 """
 
+from pathlib import Path
+
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 
@@ -270,6 +272,12 @@ class MPSFMetricsCollector:
         self.metrics = {
             "base_corrections": [],
             "ee_corrections": [],
+            "intent_correction_base": [],
+            "intent_correction_ee": [],
+            "tracking_error_base": [],
+            "tracking_error_ee": [],
+            "teleop_mode": [],
+            "teleop_enabled": [],
             "base_rmses": [],
             "ee_rmses": [],
             "jerks": [],
@@ -288,6 +296,12 @@ class MPSFMetricsCollector:
         controller,
         robot_states,
         sim_timestep,
+        teleop_mode=None,
+        teleop_enabled=None,
+        commanded_ee_twist=None,
+        measured_base_vel=None,
+        measured_ee_vel=None,
+        dt=None,
     ):
         """Update metrics with current timestep data.
 
@@ -304,19 +318,69 @@ class MPSFMetricsCollector:
             controller: Controller instance with mask attributes and log.
             robot_states (tuple): (q, v) tuple from robot.joint_states().
             sim_timestep (float): Simulation timestep in seconds.
+            teleop_mode (str, optional): Active teleop mode, ``"base"`` or ``"ee"``.
+            teleop_enabled (bool, optional): Whether teleoperation is enabled.
+            commanded_ee_twist (np.ndarray, optional): Explicit commanded EE twist.
+            measured_base_vel (np.ndarray, optional): Explicit measured base velocity.
+            measured_ee_vel (np.ndarray, optional): Explicit measured EE velocity.
+            dt (float, optional): Actual control period for jerk. Uses
+                ``sim_timestep`` when omitted.
         """
-        # Corrections
+        # Intent corrections
         if desired_base_vel is not None:
-            correction = compute_corrections(
-                desired_base_vel, u[:3], controller.mpsf_base_mask
+            intent_base = compute_corrections(
+                desired_base_vel,
+                u[:3],
+                getattr(controller, "mpsf_base_mask", None),
             )
-            self.metrics["base_corrections"].append(correction)
+        else:
+            intent_base = 0.0
 
         if desired_ee_vel is not None:
-            correction = compute_corrections(
-                desired_ee_vel, u[3:], controller.mpsf_ee_mask
+            ee_command = (
+                commanded_ee_twist if commanded_ee_twist is not None else u[3:9]
             )
-            self.metrics["ee_corrections"].append(correction)
+            intent_ee = compute_corrections(
+                desired_ee_vel,
+                ee_command,
+                getattr(controller, "mpsf_ee_mask", None),
+            )
+        else:
+            intent_ee = 0.0
+
+        self.metrics["intent_correction_base"].append(intent_base)
+        self.metrics["intent_correction_ee"].append(intent_ee)
+        self.metrics["base_corrections"].append(intent_base)
+        self.metrics["ee_corrections"].append(intent_ee)
+
+        # Tracking errors
+        measured_base = (
+            measured_base_vel
+            if measured_base_vel is not None
+            else states["base"]["velocity"]
+        )
+        measured_ee = (
+            measured_ee_vel if measured_ee_vel is not None else states["EE"]["velocity"]
+        )
+        tracking_base = (
+            compute_corrections(desired_base_vel, measured_base)
+            if desired_base_vel is not None
+            else 0.0
+        )
+        tracking_ee = (
+            compute_corrections(desired_ee_vel, measured_ee)
+            if desired_ee_vel is not None
+            else 0.0
+        )
+        self.metrics["tracking_error_base"].append(tracking_base)
+        self.metrics["tracking_error_ee"].append(tracking_ee)
+
+        mode = teleop_mode or ""
+        enabled = bool(teleop_enabled) if teleop_enabled is not None else False
+        self.metrics["teleop_mode"].append(
+            0 if mode == "base" else 1 if mode == "ee" else -1
+        )
+        self.metrics["teleop_enabled"].append(1.0 if enabled else 0.0)
 
         # RMSE
         base_pose_ref = references.get("base_pose")
@@ -334,16 +398,21 @@ class MPSFMetricsCollector:
             self.metrics["ee_rmses"].append(ee_rmse)
 
         # Jerkiness
+        jerkiness = 0.0
         if self.u_prev is not None:
-            jerkiness = compute_jerkiness(np.vstack([self.u_prev, u]), sim_timestep)
-            self.metrics["jerks"].append(jerkiness)
+            jerk_dt = sim_timestep if dt is None else dt
+            jerkiness = compute_jerkiness(np.vstack([self.u_prev, u]), jerk_dt)
+        self.metrics["jerks"].append(jerkiness)
 
         # Control effort (L2 norm of velocity command)
         control_effort = np.linalg.norm(u)
         self.metrics["control_efforts"].append(control_effort)
 
         # Constraint violations (using measured states)
-        violations = get_constraint_violations(controller, robot_states)
+        try:
+            violations = get_constraint_violations(controller, robot_states)
+        except (AttributeError, KeyError):
+            violations = {}
         self.metrics["constraint_violations"].append(violations)
 
         # Update previous velocity for next iteration
@@ -354,6 +423,12 @@ class MPSFMetricsCollector:
         self.metrics = {
             "base_corrections": [],
             "ee_corrections": [],
+            "intent_correction_base": [],
+            "intent_correction_ee": [],
+            "tracking_error_base": [],
+            "tracking_error_ee": [],
+            "teleop_mode": [],
+            "teleop_enabled": [],
             "base_rmses": [],
             "ee_rmses": [],
             "jerks": [],
@@ -362,55 +437,93 @@ class MPSFMetricsCollector:
         }
         self.u_prev = None
 
-    def print_summary(self):
-        """Print formatted summary of collected MPSF experiment metrics."""
-        print("\n" + "=" * 80)
-        print("MPSF EXPERIMENT METRICS SUMMARY")
-        print("=" * 80)
+    def save(self, metrics_dir: Path) -> Path:
+        """Save raw metrics and aggregate summaries to disk."""
+        metrics_dir = Path(metrics_dir)
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        payload = {}
+        for key, values in self.metrics.items():
+            if key == "constraint_violations":
+                payload[key] = np.array(values, dtype=object)
+            else:
+                payload[key] = np.asarray(values)
+
+        summary_metrics = [
+            ("control_efforts", "mean_control_effort"),
+            ("jerks", "mean_jerk"),
+            ("intent_correction_base", "mean_intent_correction_base"),
+            ("intent_correction_ee", "mean_intent_correction_ee"),
+            ("tracking_error_base", "mean_tracking_error_base"),
+            ("tracking_error_ee", "mean_tracking_error_ee"),
+            ("base_corrections", "mean_base_correction"),
+            ("ee_corrections", "mean_ee_correction"),
+        ]
+        for key, output_name in summary_metrics:
+            values = self.metrics.get(key) or []
+            if values:
+                payload[output_name] = float(np.mean(values))
+                payload[output_name.replace("mean_", "max_")] = float(np.max(values))
+
+        np.savez_compressed(metrics_dir / "metrics.npz", **payload)
+        (metrics_dir / "summary.txt").write_text(self.summary_text())
+        return metrics_dir
+
+    def summary_text(self) -> str:
+        """Return a formatted summary of collected experiment metrics."""
+        lines = [
+            "",
+            "=" * 80,
+            "EXPERIMENT METRICS SUMMARY",
+            "=" * 80,
+        ]
 
         # RMSE
         if self.metrics["base_rmses"]:
-            print(
+            lines.append(
                 f"Base Pose RMSE (average): {np.mean(self.metrics['base_rmses']):.4f}"
             )
         else:
-            print("Base Pose RMSE: N/A (no base pose references)")
+            lines.append("Base Pose RMSE: N/A (no base pose references)")
 
         if self.metrics["ee_rmses"]:
-            print(f"EE Pose RMSE (average): {np.mean(self.metrics['ee_rmses']):.4f}")
+            lines.append(
+                f"EE Pose RMSE (average): {np.mean(self.metrics['ee_rmses']):.4f}"
+            )
         else:
-            print("EE Pose RMSE: N/A (no EE pose references)")
+            lines.append("EE Pose RMSE: N/A (no EE pose references)")
 
         # Corrections
         if self.metrics["base_corrections"]:
-            print(
+            lines.append(
                 f"Mean Base Corrections: {np.mean(self.metrics['base_corrections']):.4f}"
             )
-            print(
+            lines.append(
                 f"Max Base Correction: {np.max(self.metrics['base_corrections']):.4f} m/s"
             )
         if self.metrics["ee_corrections"]:
-            print(f"Mean EE Corrections: {np.mean(self.metrics['ee_corrections']):.4f}")
-            print(
+            lines.append(
+                f"Mean EE Corrections: {np.mean(self.metrics['ee_corrections']):.4f}"
+            )
+            lines.append(
                 f"Max EE Correction: {np.max(self.metrics['ee_corrections']):.4f} m/s"
             )
 
         # Jerkiness
         if self.metrics["jerks"]:
-            print(f"Mean Jerkiness: {np.mean(self.metrics['jerks']):.4f} m/s³")
+            lines.append(f"Mean Jerkiness: {np.mean(self.metrics['jerks']):.4f} m/s³")
 
         # Control effort
         if self.metrics["control_efforts"]:
-            print(
+            lines.append(
                 f"Mean Control Effort: {np.mean(self.metrics['control_efforts']):.4f} m/s/s"
             )
-            print(
+            lines.append(
                 f"Max Control Effort: {np.max(self.metrics['control_efforts']):.4f} m/s/s"
             )
 
         # Constraint violations
         if any(self.metrics["constraint_violations"]):
-            print("\nConstraint Violations Summary:")
+            lines.extend(["", "Constraint Violations Summary:"])
             all_names = set()
             for violations in self.metrics["constraint_violations"]:
                 all_names.update(violations.keys())
@@ -447,16 +560,21 @@ class MPSFMetricsCollector:
                     if per_dim_arrays:
                         per_dim_max = np.max(per_dim_arrays, axis=0)
                         per_dim_str = ", ".join([f"{v:.4f}" for v in per_dim_max])
-                        print(
+                        lines.append(
                             f"  {name}: max={max_v:.6f}, violations={timesteps_with_violation}/{total_steps}, per_dim_max=[{per_dim_str}]"
                         )
                     else:
-                        print(
+                        lines.append(
                             f"  {name}: max={max_v:.6f}, violations={timesteps_with_violation}/{total_steps}"
                         )
                 else:
-                    print(
+                    lines.append(
                         f"  {name}: max={max_v:.6f}, violations={timesteps_with_violation}/{total_steps}"
                     )
 
-        print("=" * 80 + "\n")
+        lines.extend(["=" * 80, ""])
+        return "\n".join(lines)
+
+    def print_summary(self):
+        """Print formatted summary of collected MPSF experiment metrics."""
+        print(self.summary_text())

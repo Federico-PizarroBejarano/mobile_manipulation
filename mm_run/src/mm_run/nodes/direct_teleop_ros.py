@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import os
 import sys
 import threading
+import time
+from types import SimpleNamespace
 
 import numpy as np
 import rospy
@@ -13,6 +17,7 @@ from mobile_manipulation_central.ros_interface import (
     MobileManipulatorROSInterface,
 )
 from robotiq_3f_gripper_articulated_msgs.msg import Robotiq3FGripperRobotOutput
+from scipy.spatial.transform import Rotation as Rot
 from sensor_msgs.msg import Joy
 
 from mm_control.robot import MobileManipulator3D
@@ -23,6 +28,8 @@ from mm_utils.diff_ik import (
     solve_diff_ik,
     spatial_jacobian,
 )
+from mm_utils.logging import DataLogger
+from mm_utils.metrics import MPSFMetricsCollector
 from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
@@ -37,6 +44,14 @@ from mm_utils.teleop_joy import (
     parse_teleop_config,
     store_joy_axes,
     teleop_enable_held,
+)
+from mm_utils.teleop_session_logging import (
+    TrialBagRecorder,
+    append_teleop_sample,
+    clear_experiment_timestamp,
+    commanded_ee_twist,
+    resolve_experiment_timestamp,
+    session_root,
 )
 
 
@@ -61,6 +76,10 @@ class DirectTeleopROSNode:
             config = parsing.recursive_dict_update(
                 config, parsing.load_config(args.planner_config)
             )
+        if args.logging_sub_folder and args.logging_sub_folder != "default":
+            config["logging"]["log_dir"] = os.path.join(
+                config["logging"]["log_dir"], args.logging_sub_folder
+            )
         self.config = config
 
         self.ctrl_config = config["controller"]
@@ -81,6 +100,38 @@ class DirectTeleopROSNode:
         self.rate_hz = float(self.ctrl_config["ctrl_rate"])
         if self.rate_hz <= 0.0:
             raise ValueError(f"ctrl_rate must be positive, got {self.rate_hz}")
+
+        self.logger = DataLogger(copy.deepcopy(config), name="control")
+        dims = self.ctrl_config["robot"]["dims"]
+        for key in ("q", "v", "x", "u"):
+            if key in dims:
+                self.logger.add(f"n{key}", dims[key])
+
+        self.session_timestamp = resolve_experiment_timestamp(create=True)
+        record_bag = rospy.get_param(
+            "~record_bag", rospy.get_param("/mm_run/record_bag", False)
+        )
+        bag_all = rospy.get_param("~bag_all", rospy.get_param("/mm_run/bag_all", False))
+        self._record_bag = bool(record_bag)
+        self._bag_all = bool(bag_all)
+        self.bag_recorder = TrialBagRecorder(
+            session_root(self.logger.base_directory, self.session_timestamp),
+            record_bag=self._record_bag,
+            bag_all=self._bag_all,
+            tool_vicon_name=self.ctrl_config["robot"]["tool_vicon_name"],
+            plan_topic=rospy.resolve_name("mpc_plan"),
+        )
+        self.metrics_collector = MPSFMetricsCollector()
+        self.metrics_controller = SimpleNamespace(
+            mpsf_base_mask=np.ones(3),
+            mpsf_ee_mask=np.ones(6),
+            base_mask=np.ones(3),
+            ee_mask=np.ones(6),
+            constraints=[],
+            log={},
+        )
+        self._cycle_t0 = None
+        self._saved = False
 
         self.robot_mdl = MobileManipulator3D(self.ctrl_config)
         self.ik_params = build_ik_params_from_config(config, self.nu, self.dof)
@@ -120,11 +171,48 @@ class DirectTeleopROSNode:
             self.teleop_max_base_vel,
         )
 
+    def _sync_session_timestamp(self):
+        """Re-read shared stamp (sim may set it after our __init__)."""
+        ts = resolve_experiment_timestamp(create=True)
+        if ts == self.session_timestamp:
+            return
+        rospy.loginfo(
+            "Adopting experiment timestamp %s (was %s)", ts, self.session_timestamp
+        )
+        self.session_timestamp = ts
+        self.bag_recorder.session_root = session_root(
+            self.logger.base_directory, self.session_timestamp
+        )
+
     def _on_shutdown(self):
         self.ctrl_c = True
         self._publish_velocity_plan(np.zeros(self.nu), rospy.Time.now().to_sec())
         self.robot_interface.brake()
         rospy.set_param(FORCE_ZERO_LL_KP_PARAM, False)
+        self._save_results()
+        clear_experiment_timestamp()
+
+    def _save_results(self):
+        if self._saved:
+            return
+        self.bag_recorder.stop()
+        metrics_dir = (
+            session_root(self.logger.base_directory, self.session_timestamp) / "metrics"
+        )
+        metrics_saved = False
+        logger_saved = False
+        try:
+            self.metrics_collector.save(metrics_dir)
+            self.metrics_collector.print_summary()
+            metrics_saved = True
+        except Exception as exc:
+            rospy.logerr("Failed to save direct teleop metrics: %s", exc)
+        try:
+            self.logger.save(session_timestamp=self.session_timestamp)
+            logger_saved = True
+        except Exception as exc:
+            rospy.logerr("Failed to save direct teleop control log: %s", exc)
+        self._saved = metrics_saved and logger_saved
 
     def _joy_callback(self, msg):
         with self.joy_lock:
@@ -223,22 +311,121 @@ class DirectTeleopROSNode:
             mode = self.teleop_control_mode
             enabled = teleop_enable_held(buttons, self.teleop_enable_button)
 
+        desired_base_vel = np.zeros(3, dtype=float)
+        desired_ee_vel = np.zeros(6, dtype=float)
         if not enabled:
-            return np.zeros(self.nu, dtype=float), enabled
+            return (
+                np.zeros(self.nu, dtype=float),
+                enabled,
+                mode,
+                desired_base_vel,
+                desired_ee_vel,
+                axes,
+                buttons,
+            )
 
         if mode == "base":
-            base_vel = axes_to_base_velocity(axes, self.teleop_max_base_vel)
-            ee_vel = np.zeros(6, dtype=float)
-            return joint_velocity_command(mode, base_vel, ee_vel, self.nu), enabled
+            desired_base_vel = axes_to_base_velocity(axes, self.teleop_max_base_vel)
+            v_cmd = joint_velocity_command(
+                mode, desired_base_vel, desired_ee_vel, self.nu
+            )
+            return (
+                v_cmd,
+                enabled,
+                mode,
+                desired_base_vel,
+                desired_ee_vel,
+                axes,
+                buttons,
+            )
 
-        ee_vel = axes_to_ee_velocity(
+        desired_ee_vel = axes_to_ee_velocity(
             axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
         )
         q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
         J = spatial_jacobian(self.robot_mdl, q)
+        v_cmd = solve_diff_ik(
+            J,
+            desired_ee_vel,
+            base_vel=desired_base_vel,
+            ik_params=self.ik_params,
+        )
         return (
-            solve_diff_ik(J, ee_vel, base_vel=np.zeros(3), ik_params=self.ik_params),
+            v_cmd,
             enabled,
+            mode,
+            desired_base_vel,
+            desired_ee_vel,
+            axes,
+            buttons,
+        )
+
+    def _record_cycle(
+        self,
+        timestamp,
+        cycle_period,
+        v_cmd,
+        enabled,
+        mode,
+        desired_base_vel,
+        desired_ee_vel,
+        joy_axes,
+        joy_buttons,
+    ):
+        if not enabled:
+            desired_base_vel = np.zeros(3, dtype=float)
+            desired_ee_vel = np.zeros(6, dtype=float)
+
+        q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
+        v = np.asarray(self.robot_interface.v, dtype=float).reshape(-1)[: self.nu]
+        J = spatial_jacobian(self.robot_mdl, q)
+        ee_pos, ee_quat = self.robot_mdl.getEE(q)
+        ee_pose = np.hstack([ee_pos, Rot.from_quat(ee_quat).as_euler("xyz")])
+        ee_vel = commanded_ee_twist(J, v)
+        ee_cmd_twist = commanded_ee_twist(J, v_cmd)
+        base_pose = q[:3].copy()
+        base_vel = v[:3].copy()
+
+        append_teleop_sample(
+            self.logger,
+            ts=timestamp,
+            q=q,
+            v=v,
+            base_pose=base_pose,
+            base_vel=base_vel,
+            ee_pose=ee_pose,
+            ee_vel=ee_vel,
+            joy_axes=joy_axes,
+            joy_buttons=joy_buttons,
+            teleop_mode=mode,
+            teleop_enabled=enabled,
+            desired_base_vel=desired_base_vel,
+            desired_ee_vel=desired_ee_vel,
+            u_cmd=v_cmd,
+            cycle_period=cycle_period,
+        )
+
+        states = {
+            "base": {"pose": base_pose, "velocity": base_vel},
+            "EE": {"pose": ee_pose, "velocity": ee_vel},
+        }
+        metric_desired_base = desired_base_vel if enabled and mode == "base" else None
+        metric_desired_ee = desired_ee_vel if enabled and mode == "ee" else None
+        self.metrics_collector.update(
+            {},
+            states,
+            v_cmd,
+            metric_desired_base,
+            metric_desired_ee,
+            self.metrics_controller,
+            (q, v),
+            self.mpc_dt,
+            teleop_mode=mode,
+            teleop_enabled=enabled,
+            commanded_ee_twist=ee_cmd_twist if mode == "ee" else None,
+            measured_base_vel=base_vel,
+            measured_ee_vel=ee_vel,
+            dt=cycle_period,
         )
 
     def _publish_velocity_plan(self, v_cmd, t):
@@ -264,26 +451,58 @@ class DirectTeleopROSNode:
         rate = rospy.Rate(self.rate_hz)
         self._wait_for_joint_states(rate)
         self._wait_for_start(rate)
+        self._sync_session_timestamp()
+
+        self.bag_recorder.start()
+        if self.bag_recorder.last_error is not None:
+            rospy.logwarn(
+                "rosbag record failed to start: %s", self.bag_recorder.last_error
+            )
 
         rospy.set_param("/controller_started", True)
-        rospy.loginfo("Direct teleop started")
+        rospy.loginfo("Direct teleop started (session %s)", self.session_timestamp)
+        self._cycle_t0 = time.perf_counter()
 
         while not self.ctrl_c and not rospy.is_shutdown():
             if self.start_end_button_interface.button == 1:
                 self.start_end_button_interface.reset_button()
                 break
 
+            cycle_t0 = time.perf_counter()
+            cycle_period = cycle_t0 - self._cycle_t0
+            self._cycle_t0 = cycle_t0
             self._poll_gripper_toggle()
-            v_cmd, enabled = self._compute_v_cmd()
+            (
+                v_cmd,
+                enabled,
+                mode,
+                desired_base_vel,
+                desired_ee_vel,
+                joy_axes,
+                joy_buttons,
+            ) = self._compute_v_cmd()
             self._sticks_active_param = bool(enabled)
             rospy.set_param(STICKS_ACTIVE_PARAM, self._sticks_active_param)
-            self._publish_velocity_plan(v_cmd, rospy.Time.now().to_sec())
+            timestamp = rospy.Time.now().to_sec()
+            self._publish_velocity_plan(v_cmd, timestamp)
+            self._record_cycle(
+                timestamp,
+                cycle_period,
+                v_cmd,
+                enabled,
+                mode,
+                desired_base_vel,
+                desired_ee_vel,
+                joy_axes,
+                joy_buttons,
+            )
             rate.sleep()
 
         self._publish_velocity_plan(np.zeros(self.nu), rospy.Time.now().to_sec())
         self.robot_interface.brake()
         rospy.set_param(FORCE_ZERO_LL_KP_PARAM, False)
         rospy.set_param("/controller_finished", True)
+        self._save_results()
         rospy.loginfo("Direct teleop stopped")
 
 

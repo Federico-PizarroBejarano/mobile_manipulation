@@ -14,6 +14,10 @@ from mobile_manipulation_central.simulation_ros_interface import (
 from mm_simulator import simulation
 from mm_utils import parsing
 from mm_utils.logging import DataLogger
+from mm_utils.teleop_session_logging import (
+    clear_experiment_timestamp,
+    resolve_experiment_timestamp,
+)
 
 
 def main():
@@ -66,12 +70,12 @@ def main():
     # initial time, state, input
     t = 0.0
 
-    # Create shared timestamp for logging (format: YYYY-MM-DD_HH-MM-SS)
-    session_timestamp = timestamp.strftime("%Y-%m-%d_%H-%M-%S")
-
-    # Set ROS parameter so control node can use the same timestamp
+    # ros interface
     rospy.init_node("sim_ros")
-    rospy.set_param("/experiment_timestamp", session_timestamp)
+    # Prefer an existing stamp (controller may have set it during Bullet GUI load).
+    # Never overwrite — that was splitting sim/ vs control/ into two folders.
+    session_timestamp = resolve_experiment_timestamp(create=True)
+    rospy.on_shutdown(clear_experiment_timestamp)
 
     # init logger
     logger = DataLogger(config, name="sim")
