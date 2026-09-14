@@ -2,5 +2,7 @@ base_to_arm_transform:
   rpy: [0, 0, 0]
   xyz: [0, 0, 0.0128]
 gripped_object_transform:
-  rpy: [0, 0, 0]
+  # Plank normal is not gripper +Z. At the tray home this makes tool +Z world-up.
+  # Level plank: /ur10/joint_states is elbow, lift, pan, ... not pan-first.
+  rpy: [-1.28681603, 1.54739231, -1.26442274]
   xyz: [0.0, -0., 0.29]

@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!-- Hardware teleop: plan node + low_level on the real robot.
+     Requires thing.launch (robot + joy_stick_relay) already running unless launch_robot:=true.
+     Joy defaults off: lab bringup already publishes /bluetooth_teleop/joy.
+     teleop:=mpsf (default) or teleop:=direct. -->
+
+<launch>
+  <arg name="config" default="$(find mm_run)/config/mpsf_experiments/joystick_teleop_with_obstacles.yaml" doc="Experiment config YAML"/>
+  <arg name="ctrl_config" default="default"/>
+  <arg name="planner_config" default="default"/>
+  <arg name="logging_sub_folder" default="default"/>
+  <arg name="teleop" default="mpsf" doc="mpsf or direct"/>
+  <arg name="controller_type" default="ps4" doc="ps4 or xbox (only used if joystick:=true)"/>
+  <arg name="joy_dev" default="$(optenv RIDGEBACK_JOY_DEVICE /dev/input/js0)"/>
+  <arg name="joystick" default="false" doc="start mm_run joy_node; leave false if /bluetooth_teleop/joy already exists"/>
+  <arg name="launch_robot" default="false" doc="if true, also launch thing.launch"/>
+
+  <include if="$(arg launch_robot)" file="$(find mobile_manipulation_central)/launch/thing.launch"/>
+
+  <include file="$(find mm_run)/launch/teleop.launch">
+    <arg name="joystick" value="$(arg joystick)"/>
+    <arg name="controller_type" value="$(arg controller_type)"/>
+    <arg name="joy_dev" value="$(arg joy_dev)"/>
+  </include>
+
+  <include file="$(find mm_run)/launch/run.launch">
+    <arg name="config" value="$(arg config)"/>
+    <arg name="ctrl_config" value="$(arg ctrl_config)"/>
+    <arg name="planner_config" value="$(arg planner_config)"/>
+    <arg name="logging_sub_folder" value="$(arg logging_sub_folder)"/>
+    <arg name="teleop" value="$(arg teleop)"/>
+  </include>
+</launch>

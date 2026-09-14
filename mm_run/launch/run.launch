@@ -6,6 +6,7 @@
   <arg name="ctrl_config" default="default" doc="alternative controller config overwriting the one in config"/>
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder"  default="default" doc="save data to a sub folder if set"/>
+  <arg name="teleop" default="none" doc="direct|mpsf|none — which plan publisher to run"/>
 
   <param name="/use_sim_time" value="False" type="bool"/>
 

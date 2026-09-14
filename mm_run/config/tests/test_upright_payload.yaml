@@ -30,8 +30,9 @@ simulation:
   duration: 8
   timestep: 0.01
   robot:
-    home: [0.06492914, -0.05419276, -0.04503236,  1.74097135, -0.31314123,
-        0.99901806, -2.25675201,  1.5668383 ,  2.82451102]
+    # Same leveled-plank arm as simulation.yaml; base left at this test's start pose.
+    home: [0.06492914, -0.05419276, -0.04503236, 1.57090235, -1.04724914,
+        2.09447575, -1.05401260, 1.57079864, 1.28475273]
     urdf:
       includes:
         - "$(find mobile_manipulation_central)/urdf/xacro/cartesian_base_joints.urdf.xacro"

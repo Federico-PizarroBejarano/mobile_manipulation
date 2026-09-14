@@ -214,7 +214,7 @@ class AlignedToolConstraint(NonlinearConstraint):
     def __init__(
         self,
         robot_mdl,
-        eps_align=1e-3,
+        eps_align=3e-3,
         name="aligned",
     ):
         """Enforce ``|cross(z_tool, f_dir)_i| <= eps_align`` and ``dot(z_tool, f_dir) >= 0``.

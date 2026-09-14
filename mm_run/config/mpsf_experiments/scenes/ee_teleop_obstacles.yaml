@@ -1,17 +1,24 @@
-# Obstacle scene for EE Teleop Base Collision experiment
-# Obstacles placed such that base must zigzag through them while EE moves forward
+# Virtual obstacles for EE-forward MPSF experiments (ee_teleop_base_collision, joystick teleop).
+# Lab workspace: x in (-4, 0), y in (-4, 1).
+# Nominal base path: y ~ -1.5 while EE drives toward +x (less negative x).
+#
+# MPC collision: base_collision_link sphere r=0.49 (center at base_link, z≈0.01 m in
+# the planar model) + collision_safety_margin 0.05 + cylinder radius below.
+# Cylinder xyz z must be length/2 so props sit on the ground (not floating).
+# Widen y separation so the base can weave near y ~ -1.5 (match physical props by
+# tuning radius / xyz here, not only RViz visuals).
 
 cylinder:
-  # Obstacle 1: Blocks direct path to EE goal
+  # Obstacle 1: south of nominal path
   - name: "cylinder_1"
-    radius: 0.3
-    length: 1.0
-    xyz: [1.3, -0.4, 0.5]  # [x, y, z] in world frame - blocks direct base path
+    radius: 0.21
+    length: 0.50
+    xyz: [-1.8, -2.45, 0.25]  # half-height
     rpy: [0, 0, 0]
 
-  # Obstacle 2: Forces base to zigzag
+  # Obstacle 2: north of nominal path
   - name: "cylinder_2"
-    radius: 0.3
-    length: 1.0
-    xyz: [3, 0.9, 0.5]  # To the left of path
+    radius: 0.25
+    length: 0.60
+    xyz: [-1.0, -0.55, 0.30]  # half-height
     rpy: [0, 0, 0]

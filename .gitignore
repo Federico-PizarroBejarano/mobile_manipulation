@@ -23,6 +23,7 @@ results/
 checkpoints/
 logs/
 eval_results/
+bagfiles/
 
 # Cursor Docs
 docs/

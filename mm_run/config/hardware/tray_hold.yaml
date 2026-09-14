@@ -1,0 +1,49 @@
+# Hardware: hold still and keep the gripped plank level.
+#
+# Launch (thing.launch already up, hold d-pad up):
+#   roslaunch mm_run run.launch config:=$(rospack find mm_run)/config/hardware/tray_hold.yaml
+# Press Square or Enter to start. Release d-pad up to stop.
+
+planner:
+  tasks:
+    - name: HoldAndBalance
+      planner_type: WaypointPlanner
+      # Live /ridgeback/joint_states at the leveled plank (x, y, yaw).
+      base_pose: [-0.38931187, -1.76829147, -0.03119341]
+      # Model tool xyz at that pose. Last three unused (ee_mask ignores orientation).
+      ee_pose: [0.86081027, -1.63319305, 0.71687873, 0.0, 0.0, 0.0]
+      tracking_pos_err_tol: 0.05
+      tracking_ori_err_tol: 0.1
+      hold_period: 600.0
+
+controller:
+  # Hold base and tool position. Tray tilt is the upright constraint, not this waypoint.
+  base_mask: [true, true, true]
+  ee_mask: [true, true, true, false, false, false]
+  self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: False
+  upright:
+    enabled: True
+    eps_align: 1e-4
+  acados:
+    name: "TestAlignedPayload"
+    cython:
+      recompile: false
+    ocp_solver_options:
+      qp_solver_iter_max: 40
+
+simulation:
+  duration: 600
+  timestep: 0.03
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"
+  - package: "mm_run"
+    path: "config/scene/empty.yaml"
+
+logging:
+  log_dir: "hardware/tray_hold"
+  log_level: 20

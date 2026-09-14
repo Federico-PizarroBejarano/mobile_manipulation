@@ -567,6 +567,10 @@ class MPC(MPCBase):
         self.ocp_solver.set(0, "lbx", xo)
         self.ocp_solver.set(0, "ubx", xo)
         status = self.ocp_solver.solve()
+        # Cold full-SQP often hits MAXITER (status 2) with a usable warm-start left in
+        # the solver; one immediate retry usually converges (see soft-RBF teleop).
+        if status == 2 and self.ocp.solver_options.nlp_solver_type != "SQP_RTI":
+            status = self.ocp_solver.solve()
         t2 = time.perf_counter()
         self.log["time_ocp_solve"] = t2 - t1
 

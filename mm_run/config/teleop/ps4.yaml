@@ -1,10 +1,24 @@
-# Teleop configuration for PS4 joystick using the x-pad configuration.
+# Teleop configuration for PS4 joystick.
 #
-# Button mappings used by the controller:
-#   Button 0: X
-#   Button 1: Circle (task switching)
-#   Button 2: Square (start/end tasks)
-#   Button 3: Triangle
+# Button mappings (sim and hardware):
+#   Button 0:  Cross — toggle base / EE teleop mode
+#   Button 1:  Circle — unused by MPSF teleop
+#   Button 2:  Square — press once to start (then release)
+#   Button 3:  Triangle — toggle gripper open / close (normal mode)
+#   Button 4:  L1 — Clearpath teleop (do not hold during MPSF)
+#   Button 5:  R1 — Clearpath teleop (do not hold during MPSF)
+#   Button 9:  Options — unused by MPSF teleop
+#   Button 13: D-pad up — hardware deadman and MPSF stick enable
+#   Button 14: D-pad left — EE yaw negative (verify with test_joystick.py)
+#   Button 15: D-pad right — EE yaw positive (verify with test_joystick.py)
+#
+# Axis mappings:
+#   Axis 0: Left stick X (vy)
+#   Axis 1: Left stick Y (vx)
+#   Axis 2: Left trigger — EE pitch negative (wy-)
+#   Axis 3: Right stick X — base vyaw or EE wx
+#   Axis 4: Right stick Y — EE vz
+#   Axis 5: Right trigger — EE pitch positive (wy+)
 
 joy_node:
   deadzone: 0.1

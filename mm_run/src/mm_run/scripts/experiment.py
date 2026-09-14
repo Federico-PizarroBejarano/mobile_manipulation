@@ -13,7 +13,11 @@ from mm_simulator import simulation
 from mm_utils import parsing
 from mm_utils.logging import DataLogger
 from mm_utils.metrics import extract_robot_states
-from mm_utils.mpc_plan_tracking import build_plan_interpolators, low_level_velocity_step
+from mm_utils.mpc_plan_tracking import (
+    apply_replan_continuity,
+    build_plan_interpolators,
+    low_level_velocity_step,
+)
 
 
 def main():
@@ -137,6 +141,7 @@ def main():
     ctrl_period = 1.0 / float(ctrl_config["ctrl_rate"])
     last_controller_time = -ctrl_period  # Initialize to allow first call
     lpf_alpha = float(ctrl_config["cmd_vel_lpf"])
+    replan_ff_blend_s = float(ctrl_config.get("replan_ff_blend_s", ctrl_config["dt"]))
 
     # Cached MPC plan interpolators (rebuilt only when controller.control runs).
     plan_interps = None
@@ -151,6 +156,8 @@ def main():
 
         # Only call controller if enough time has passed
         if t - last_controller_time + 1e-6 >= ctrl_period:
+            t_handoff = t - last_controller_time
+            old_plan_interps = plan_interps
             # Get references from TaskManager
             references = sot.getReferences(
                 t, robot_states, controller.N + 1, controller.dt
@@ -170,6 +177,16 @@ def main():
                 q_bar if low_level_on else None,
                 ctrl_config["cmd_vel_type"],
             )
+            if (
+                old_plan_interps is not None
+                and ctrl_config["cmd_vel_type"] == "interpolation"
+            ):
+                apply_replan_continuity(
+                    plan_interps,
+                    old_plan_interps,
+                    t_handoff,
+                    replan_ff_blend_s,
+                )
 
         t_mpc = t - last_controller_time
         q_meas = np.asarray(robot_states[0], dtype=float).reshape(-1)[:dof_mpc]

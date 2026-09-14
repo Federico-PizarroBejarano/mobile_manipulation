@@ -17,6 +17,7 @@ from mm_utils.math import (
     wrap_pi_scalar,
 )
 from mm_utils.metrics import MPSFMetricsCollector, extract_robot_states
+from mm_utils.teleop_joy import parse_goal_velocity_params
 
 
 def parse_args():
@@ -166,7 +167,11 @@ def run_simulation(
             )
 
             desired_base_vel, desired_ee_vel = calculate_desired_velocity(
-                base_goal, ee_goal, states, controller
+                base_goal,
+                ee_goal,
+                states,
+                controller,
+                mpsf_params=ctrl_config.get("mpsf_params"),
             )
 
             # Add desired velocities for MPSF (only add if not None)
@@ -240,7 +245,9 @@ def run_simulation(
     return metrics_collector
 
 
-def calculate_desired_velocity(base_goal, ee_goal, states, controller):
+def calculate_desired_velocity(
+    base_goal, ee_goal, states, controller, mpsf_params=None
+):
     """Calculate desired base and EE velocity from goal positions and robot states.
 
     Uses a deadband approach: maintains constant velocity when far from goal,
@@ -251,17 +258,16 @@ def calculate_desired_velocity(base_goal, ee_goal, states, controller):
         ee_goal (np.ndarray or None): Goal EE position in world frame, shape (6,).
         states (dict): Current robot states.
         controller (MPCBase): Controller instance with robot.ub_u and robot.lb_u attributes.
+        mpsf_params (dict, optional): ``controller.mpsf_params``; uses ``goal_velocity`` limits.
 
     Returns:
         tuple: (desired_base_vel, desired_ee_vel) where each is a (3,) or (6,) array, or None.
     """
-    # Velocity thresholds: maintain constant velocity if error > threshold
-    base_threshold = [0.3, 0.3, 0.3]  # meters
-    ee_threshold = [0.2, 0.2, 0.2, 0.3, 0.3, 0.3]  # meters, radians
-
-    # Maximum velocities (used when far from goal)
-    max_base_vel = np.array([1, 1, 1])
-    max_ee_vel = np.array([0.8, 0.8, 0.8, 0.5, 0.5, 0.5])
+    goal_vel = parse_goal_velocity_params(mpsf_params)
+    base_threshold = goal_vel["base_threshold"]
+    ee_threshold = goal_vel["ee_threshold"]
+    max_base_vel = goal_vel["max_base_vel"]
+    max_ee_vel = goal_vel["max_ee_vel"]
 
     # Calculate base velocity
     if base_goal is not None:

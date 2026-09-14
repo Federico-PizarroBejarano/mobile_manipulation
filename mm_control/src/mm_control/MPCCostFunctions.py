@@ -9,22 +9,40 @@ from mm_utils.math import casadi_SO2, casadi_SO3_log
 
 
 class RBF:
+    """Radial soft penalty on slack ``h = sd - d_safe``.
+
+    Target shape (hard hinge):
+
+        B(h) = 0.5 * mu * (max(zeta - h, 0) / zeta)^2
+
+    A plain ``fmax`` hinge is only C1 and stalled SQP with ``use_custom_hess``
+    (acados status 2 / MAXITER). Branched softplus also poisons CasADi AD
+    (``exp`` overflow in unused branches).
+
+    Implementation: C∞ smooth-max hinge
+
+        gap(h) = 0.5 * ((zeta - h) + sqrt((zeta - h)^2 + eps^2))
+        B(h)   = 0.5 * mu * (gap(h) / zeta)^2
+
+    with ``eps = zeta / 25`` (transition ≪ band). Outside the band ``gap`` and the
+    force are negligible (not identically zero). Grad/hess via ``cs.hessian``.
+
+    Do **not** use ``conditional(cond, [a, b], 0)`` — CasADi maps False→a and
+    True→b and never hits the default ``0``, which previously left a long-range
+    ``-mu*log(h)`` force when far from obstacles.
+    """
+
     mu_sym = cs.MX.sym("mu")
     zeta_sym = cs.MX.sym("zeta")
     h_sym = cs.MX.sym("h")
 
-    # CasADi evaluates both conditional branches: log must stay defined for h<=0.
-    h_pos = cs.fmax(h_sym, 1e-12)
-    B_eqn_list = [
-        -mu_sym * cs.log(h_pos),
-        mu_sym
-        * (0.5 * (((h_sym - 2 * zeta_sym) / zeta_sym) ** 2 - 1) - cs.log(zeta_sym)),
-    ]
-    s_eqn = h_sym < zeta_sym
-    B_eqn = cs.conditional(s_eqn, B_eqn_list, 0, False)
-    B_fcn = cs.Function("B_fcn", [h_sym, mu_sym, zeta_sym], [B_eqn])
-
+    eps = zeta_sym / 25.0
+    diff = zeta_sym - h_sym
+    gap = 0.5 * (diff + cs.sqrt(diff * diff + eps * eps))
+    B_eqn = 0.5 * mu_sym * (gap / zeta_sym) ** 2
     B_hess_eqn, B_grad_eqn = cs.hessian(B_eqn, h_sym)
+
+    B_fcn = cs.Function("B_fcn", [h_sym, mu_sym, zeta_sym], [B_eqn])
     B_hess_fcn = cs.Function("ddBddh_fcn", [h_sym, mu_sym, zeta_sym], [B_hess_eqn])
     B_grad_fcn = cs.Function("dBdh_fcn", [h_sym, mu_sym, zeta_sym], [B_grad_eqn])
 

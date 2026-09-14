@@ -3,7 +3,9 @@ base_to_arm_transform:
   rpy: [0, 0, 0]
   xyz: [0, 0, 0]
 gripped_object_transform:
-  rpy: [0, 0, 0]
+  # Same plank grip as robot_transforms_real.yaml so sim and hardware share tool +Z.
+  # Same as robot_transforms_real.yaml (name-ordered joints at the level plank).
+  rpy: [-1.28681603, 1.54739231, -1.26442274]
   xyz: [0, -0., 0.29]
 camera_base_transform:
   rpy: [-0.00348352, -0.00496256, 0.00719247]

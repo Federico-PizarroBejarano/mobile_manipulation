@@ -82,8 +82,18 @@ roslaunch mm_run run_pybullet_sim.launch config:=$(rospack find mm_run)/config/s
 To use the MPSF plan node instead of standard MPC:
 
 ```bash
-roslaunch mm_run run_pybullet_sim.launch config:=$(rospack find mm_run)/config/mpsf_experiment.yaml gui:=True mpsf:=True
+roslaunch mm_run run_pybullet_sim.launch config:=$(rospack find mm_run)/config/mpsf_experiment.yaml gui:=True teleop:=mpsf
 ```
+
+Direct (non-MPSF) joystick teleop in sim:
+
+```bash
+roslaunch mm_run run_pybullet_sim.launch \
+  config:=$(rospack find mm_run)/config/mpsf_experiments/direct_teleop.yaml \
+  gui:=True teleop:=direct
+```
+
+Also start joy if needed: `roslaunch mm_run teleop.launch`.
 
 ### Visualize Results
 Logs are written under `mm_run/results/<log_dir>/<TIMESTAMP>/`:

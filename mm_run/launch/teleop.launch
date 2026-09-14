@@ -3,7 +3,8 @@
   <arg name="joystick" default="true"/>
   <arg name="controller_type" default="ps4" doc="Controller type: ps4 or xbox"/>
 
-  <group ns="teleop" if="$(arg joystick)">
+  <!-- Same namespace as Clearpath / lab joy bringup so deadman + MPSF share one topic. -->
+  <group ns="bluetooth_teleop" if="$(arg joystick)">
     <!-- Load appropriate config based on controller type -->
     <group if="$(eval controller_type == 'ps4')">
       <rosparam command="load" file="$(find mm_run)/config/teleop/ps4.yaml"/>

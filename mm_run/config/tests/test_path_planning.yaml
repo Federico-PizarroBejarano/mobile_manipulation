@@ -1,21 +1,21 @@
 # Integration Test: Path Planning
 # Tests: PathPlanner for base + EE path
-# This verifies that PathPlanner works
+# Lab workspace: x in (-4, 0), y in (-4, 1). Paths offset from sim defaults by (-3, -2).
 
 planner:
   tasks:
   - name: Path Planning
     planner_type: PathPlanner
     base_path:
-    - [0, 0, 0]
-    - [1.0, 0.2, 0.5]
-    - [2.0, 0.5, 1.0]
-    - [2.5, 0.4, 1.57]
+    - [-3.0, -2.0, 0]
+    - [-2.0, -1.8, 0.5]
+    - [-1.0, -1.5, 1.0]
+    - [-0.5, -1.6, 1.57]
     ee_path:
-    - [1.5, 0.4, 1.0, -1pi, 0, 0]
-    - [1.5, 0.8, 1.0, -1pi, 0, 0]
-    - [1, 0.4, 1.5, -0.5pi, 0.5pi, 0]
-    - [1.5, 0.4, 1.5, -0.5pi, 0.5pi, 0]
+    - [-1.5, -1.6, 1.0, -1pi, 0, 0]
+    - [-1.5, -1.2, 1.0, -1pi, 0, 0]
+    - [-2.0, -1.6, 1.5, -0.5pi, 0.5pi, 0]
+    - [-1.5, -1.6, 1.5, -0.5pi, 0.5pi, 0]
     dt: 1.0
     tracking_pos_err_tol: 0.2
 

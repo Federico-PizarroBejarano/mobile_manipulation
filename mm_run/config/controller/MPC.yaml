@@ -8,16 +8,18 @@ controller:
   ctrl_rate: 20
   cmd_vel_pub_rate: 100 # hz
   cmd_vel_type: "interpolation"       # interpolation: cmd from vel_bar; integration: cmd from acc_bar
-  cmd_vel_lpf: 0.9                    # weight on new sample; 1.0 disables
+  cmd_vel_lpf: 0.35                    # weight on new sample; 1.0 disables
   cmd_vel_stale_s: 0.5                # zero cmd_vel if the plan is older than this [s]
-  # ROS: mpc_ros publishes MpcPlan; low_level_cmd_node publishes cmd_vel (controller.launch).
+  replan_ff_blend_s: 0.4              # fade replan feedforward offset over this horizon [s]
+  # ROS: plan node (mpc_ros / mpsf_ros / direct_teleop_ros) publishes MpcPlan; low_level_cmd_node publishes cmd_vel.
+  # low_level_cmd_node also publishes cmd_vel_world (world-frame, pre body rotation).
   ros_visualization_enabled: True
   ros_visualization_rate: 5.0         # Hz; planner/MPC markers (0 disables timer)
 
   low_level_tracking:
     enabled: true
-    kp: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-    log_refs: false   # sim only: log ll_v_ffs, ll_q_refs, ll_v_cmds when enabled
+    kp: [0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+    log_refs: true   # sim only: log ll_v_ffs, ll_q_refs, ll_v_cmds when enabled
 
   soft_cst: True
   self_collision_avoidance_enabled: True
@@ -25,21 +27,37 @@ controller:
   cst_tol_schedule_enabled: False
   ee_pose_tracking_enabled: True
 
+  # Shared MPSF defaults (experiment yaml can override under controller.mpsf_params)
+  mpsf_params:
+    mpsf_weight_multiplier: 0.5
+    goal_velocity:
+      max_base_vel: [0.3, 0.3, 0.3]       # [vx, vy, vyaw] when far from base goal
+      max_ee_vel: [0.15, 0.15, 0.15, 0.3, 0.3, 0.3]  # [vx, vy, vz, wx, wy, wz]
+      base_threshold: [0.3, 0.3, 0.3]
+      ee_threshold: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3]
+
   collision_constraint_type:
     self: "SignedDistanceConstraint"
     static_obstacles: "SignedDistanceConstraint"
 
   collision_constraints_softened:
     self: False
-    static_obstacles: False
+    static_obstacles: True
 
   collision_safety_margin:
     self: 0.10
-    static_obstacles: 0.10
+    static_obstacles: 0.05   # target clearance [m]; soft RBF adds zeta planning buffer beyond this
 
   # mpc_ros E-stop: brake and shut down when a signed distance drops below this.
   # Must stay below collision_safety_margin, which the MPC is allowed to enter.
   collision_estop_margin: 0.0
+
+  # Optional: replace base velocity from joint_states with odom when they disagree.
+  base_velocity_guard:
+    enabled: false
+    odom_topic: /odometry/filtered
+    max_disagreement: 0.25
+    stale_s: 0.2
 
   # Payload balancing (aligned acceleration constraint, MPC-only); link/up/g fixed in code
   upright:
@@ -55,38 +73,40 @@ controller:
       mu: 0.0001
       zeta: 0.005
     static_obstacles:
-      mu: 0.0001
-      zeta: 0.005
+      mu: 0.05
+      zeta: 0.04
 
   # Simplified cost function parameters (6 core cost types)
   # The system automatically maps these to specific cost instances based on planner types
   cost_params:
     # End-effector pose cost (used for both Vec3 position and SE3 pose, world and base frames)
     EEPose:
-      Qk: [3, 3, 3, 3, 3, 3]  # For SE3: [x, y, z, roll, pitch, yaw]. For Vec3: first 3 used
+      Qk: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2]  # For SE3: [x, y, z, roll, pitch, yaw]. For Vec3: first 3 used
       P: [1, 1, 1, 1, 1, 1]    # Terminal weights (same structure)
     # End-effector velocity cost (6D: 3D linear + 3D angular for SE3 compatibility)
+    # Active only when the planner supplies ee_velocity (WaypointPlanner: only if end_stop: true).
     EEVel:
-      Qk: [1, 1, 1, 1, 1, 1]  # [vx, vy, vz, ωx, ωy, ωz]
-      P: [1, 1, 1, 1, 1, 1]    # Terminal weights [vx, vy, vz, ωx, ωy, ωz]
+      Qk: [0.6, 0.6, 0.6, 0.5, 0.5, 0.5]  # [vx, vy, vz, ωx, ωy, ωz]
+      P: [0.6, 0.6, 0.6, 0.5, 0.5, 0.5]    # Terminal weights [vx, vy, vz, ωx, ωy, ωz]
     # Base pose cost (always SE2: [x, y, yaw])
     # Set yaw weight (3rd element) to 0 to disable yaw tracking
     BasePose:
-      Qk: [3, 3, 3]  # [x, y, yaw] - set yaw weight to 0 to disable yaw tracking
+      Qk: [0.1, 0.1, 0.1]  # [x, y, yaw] - set yaw weight to 0 to disable yaw tracking
       P: [1, 1, 1]    # Terminal weights [x, y, yaw]
     # Base velocity cost (always 3D: [vx, vy, vyaw])
+    # Same activation rule as EEVel (WaypointPlanner without end_stop → inactive).
     # Set vyaw weight (3rd element) to 0 to disable yaw velocity tracking
     BaseVel:
-      Qk: [1, 1, 1]  # [vx, vy, vyaw] - set vyaw weight to 0 to disable yaw velocity tracking
-      P: [1, 1, 1]    # Terminal weights [vx, vy, vyaw]
+      Qk: [0.3, 0.3, 0.3]  # [vx, vy, vyaw] - set vyaw weight to 0 to disable yaw velocity tracking
+      P: [0.3, 0.3, 0.3]    # Terminal weights [vx, vy, vyaw]
     # Control effort cost (always included)
     ControlEffort:
       Qqa: [0, 0, 0, 0, 0, 0]
       Qqb: [0, 0, 0]
-      Qva: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-      Qvb: [0.01, 0.01, 0.01]
-      Qua: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-      Qub: [0.01, 0.01, 0.01]
+      Qva: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+      Qvb: [0.25, 0.25, 0.25]
+      Qua: [0.08, 0.08, 0.08, 0.08, 0.08, 0.08]
+      Qub: [0.3, 0.3, 0.3]
     # Regularization cost (optional)
     Regularization:
       eps: 1.0e-06
@@ -120,7 +140,7 @@ controller:
       hessian_approx: "GAUSS_NEWTON"
       integrator_type: "ERK"
       print_level: 0
-      nlp_solver_type: "SQP_RTI"  #SQP_RTI, SQP
+      nlp_solver_type: "SQP"  #SQP_RTI, SQP
       globalization: "MERIT_BACKTRACKING"
       qp_solver_iter_max: 40
       nlp_solver_tol_comp: 1.e-06

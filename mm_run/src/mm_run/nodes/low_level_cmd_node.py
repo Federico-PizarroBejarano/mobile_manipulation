@@ -9,11 +9,22 @@ import numpy as np
 import rospy
 from mobile_manipulation_central.ros_interface import MobileManipulatorROSInterface
 from rosgraph_msgs.msg import Clock
+from std_msgs.msg import Float64MultiArray
 
 from mm_control.robot import MobileManipulator3D
 from mm_run.msg import MpcPlan
 from mm_utils import parsing
-from mm_utils.mpc_plan_tracking import build_plan_interpolators, low_level_velocity_step
+from mm_utils.mpc_plan_tracking import (
+    apply_replan_continuity,
+    build_plan_interpolators,
+    low_level_velocity_step,
+)
+from mm_utils.teleop_joy import (
+    FORCE_ZERO_LL_KP_PARAM,
+    STICKS_ACTIVE_PARAM,
+    TELEOP_MODE_PARAM,
+    VALID_TELEOP_MODES,
+)
 
 
 class LowLevelCmdNode:
@@ -50,19 +61,47 @@ class LowLevelCmdNode:
         self.rate_hz = float(self.ctrl_config["cmd_vel_pub_rate"])
         self.lpf_alpha = float(self.ctrl_config["cmd_vel_lpf"])
         self.stale_s = float(self.ctrl_config["cmd_vel_stale_s"])
+        self.replan_ff_blend_s = float(
+            self.ctrl_config.get("replan_ff_blend_s", self._mpc_dt_cfg)
+        )
         if not (0.0 < self.lpf_alpha <= 1.0):
             raise ValueError(f"cmd_vel_lpf must be in (0, 1], got {self.lpf_alpha}")
         if self.stale_s <= 0.0:
             raise ValueError(f"cmd_vel_stale_s must be positive, got {self.stale_s}")
 
+        # Only teleop configs should honor this param. A leftover False from a
+        # previous teleop launch otherwise drops every non-teleop plan.
+        teleop_cfg = self.ctrl_config.get("teleop") or {}
+        self._teleop_gate = bool(teleop_cfg.get("enabled", False))
+        if not self._teleop_gate:
+            rospy.set_param(STICKS_ACTIVE_PARAM, True)
+
+        self.teleop_mode = str(rospy.get_param(TELEOP_MODE_PARAM, "none"))
+        if self.teleop_mode not in VALID_TELEOP_MODES:
+            raise ValueError(
+                f"teleop must be one of {VALID_TELEOP_MODES}, got {self.teleop_mode!r}"
+            )
+
         ll = self.ctrl_config.get("low_level_tracking", {})
         self.ll_enabled = bool(ll.get("enabled", False))
         self.kp = np.asarray(ll.get("kp", []), dtype=float).reshape(-1)
-        self.kp_arg = (
-            self.kp
-            if (self.ll_enabled and self.kp.size > 0 and np.any(self.kp != 0.0))
-            else None
+        # Direct teleop freezes q_bar at measurement; P tracking fights stick vel.
+        # Prefer teleop_mode (set at launch) over the ROS param — nodes race at start.
+        force_zero_kp = self.teleop_mode == "direct" or bool(
+            rospy.get_param(FORCE_ZERO_LL_KP_PARAM, False)
         )
+        if force_zero_kp:
+            self.kp_arg = None
+            rospy.loginfo(
+                "low_level_cmd_node: kp disabled for direct teleop "
+                "(plan is velocity-only; shared YAML kp left unchanged)"
+            )
+        else:
+            self.kp_arg = (
+                self.kp
+                if (self.ll_enabled and self.kp.size > 0 and np.any(self.kp != 0.0))
+                else None
+            )
 
         self.robot_mdl = MobileManipulator3D(self.ctrl_config)
         self.lb_u_full = np.asarray(self.robot_mdl.lb_u, dtype=float).reshape(-1)
@@ -72,10 +111,16 @@ class LowLevelCmdNode:
         self.robot_interface = MobileManipulatorROSInterface()
         self.cmd_vel = np.zeros(self.nu, dtype=float)
 
+        self.cmd_vel_world_pub = rospy.Publisher(
+            "cmd_vel_world", Float64MultiArray, queue_size=1
+        )
+
         self.lock = threading.Lock()
         self.interps = None
         self.plan_stamp = None
         self.horizon_s = 0.0
+        # After enable release, drop stored plans and do not crossfade the next one.
+        self._skip_replan_continuity = False
 
         rospy.Subscriber("mpc_plan", MpcPlan, self._on_plan, queue_size=1)
 
@@ -94,6 +139,20 @@ class LowLevelCmdNode:
             dns = int((dt_pub - ds) * 1e9)
             self.timer = rospy.Timer(rospy.Duration(ds, dns), self._on_timer)
 
+    def _teleop_output_allowed(self):
+        if not self._teleop_gate:
+            return True
+        return rospy.get_param(STICKS_ACTIVE_PARAM, True) is not False
+
+    def _clear_plan_buffer(self, skip_continuity=True):
+        """Drop the stored plan so the next enable does not continue a stopped maneuver."""
+        self.interps = None
+        self.plan_stamp = None
+        self.horizon_s = 0.0
+        self.cmd_vel.fill(0.0)
+        if skip_continuity:
+            self._skip_replan_continuity = True
+
     def _reject_plan(self, reason: str):
         rospy.logwarn_throttle(
             5.0,
@@ -101,10 +160,7 @@ class LowLevelCmdNode:
             reason,
         )
         with self.lock:
-            self.interps = None
-            self.plan_stamp = None
-            self.horizon_s = 0.0
-            self.cmd_vel.fill(0.0)
+            self._clear_plan_buffer(skip_continuity=False)
 
     def _on_plan(self, msg: MpcPlan):
         N, nu, dof = int(msg.N), int(msg.nu), int(msg.dof)
@@ -153,7 +209,28 @@ class LowLevelCmdNode:
             self._reject_plan("build_plan_interpolators failed: %s" % exc)
             return
 
+        sticks_active = self._teleop_output_allowed()
         with self.lock:
+            if sticks_active is False:
+                # Teleop output is gated off. Do not keep a plan that the base is
+                # no longer tracking; the next enable starts from a fresh solve.
+                self._clear_plan_buffer()
+                return
+
+            old_interps = self.interps
+            old_stamp = self.plan_stamp
+            skip_continuity = self._skip_replan_continuity
+            self._skip_replan_continuity = False
+            if (
+                not skip_continuity
+                and old_interps is not None
+                and old_stamp is not None
+                and self.cmd_vel_type == "interpolation"
+            ):
+                t_handoff = max(0.0, (msg.header.stamp - old_stamp).to_sec())
+                apply_replan_continuity(
+                    interps, old_interps, t_handoff, self.replan_ff_blend_s
+                )
             self.interps = interps
             self.plan_stamp = msg.header.stamp
             self.horizon_s = float(N) * mpc_dt
@@ -214,6 +291,10 @@ class LowLevelCmdNode:
                         self.cmd_vel.fill(0.0)
                         out = self.cmd_vel.copy()
                         stale = True
+                    elif not self._teleop_output_allowed():
+                        self._clear_plan_buffer()
+                        out = self.cmd_vel.copy()
+                        stale = False
                     else:
                         dof = interps.dof
                         q_meas = q[:dof] if dof > 0 else q
@@ -245,14 +326,30 @@ class LowLevelCmdNode:
             t_elapsed = None
             stale = "n/a"
 
+        # World-frame command (base + arm). Publish before publish_cmd_vel, which
+        # rotates the base block into the Ridgeback body frame for /ridgeback/cmd_vel.
+        world_msg = Float64MultiArray(data=list(out))
+        self.cmd_vel_world_pub.publish(world_msg)
         self.robot_interface.publish_cmd_vel(out)
 
         wall_dt_ms = (time.perf_counter() - wall_t0) * 1000.0
         ctrl_started = rospy.get_param("/controller_started", False)
         wait_hint = ""
         if self._plan_count == 0 and not ctrl_started:
+            wait_reason = rospy.get_param("/controller_wait_reason", "")
+            if wait_reason:
+                wait_hint = f"\n  (no MpcPlan yet: {wait_reason})"
+            else:
+                wait_hint = (
+                    "\n  (no MpcPlan yet: plan node not started — "
+                    "check controller_mpc / controller_mpsf / "
+                    "controller_direct_teleop; Square is ignored until "
+                    "joint states arrive)"
+                )
+        elif self._plan_count == 0 and ctrl_started and self.teleop_mode != "direct":
             wait_hint = (
-                "\n  (no MpcPlan yet: mpc_ros still initializing or before start)"
+                "\n  (plan node started but no MpcPlan yet — "
+                "check that node for errors)"
             )
         drive = "clock" if self._use_clock_drive else "timer"
         rospy.loginfo_throttle(

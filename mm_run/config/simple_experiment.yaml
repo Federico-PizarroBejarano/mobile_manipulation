@@ -10,14 +10,14 @@ planner:
   # Task 1: Move mobile base to target pose (SE2: x, y, yaw)
   - name: Base Waypoint
     planner_type: WaypointPlanner
-    base_pose: [3.0, 0.4, 1pi]   # x, y, yaw in world frame
+    base_pose: [-2.0, -2.0, 0.0]
     tracking_pos_err_tol: 0.2
     tracking_ori_err_tol: 0.2
 
   # Task 2: Move end-effector to target pose (SE3: x, y, z, roll, pitch, yaw)
   - name: EE Waypoint
     planner_type: WaypointPlanner
-    ee_pose: [1.5, 0.4, 1.0, 1pi, 0, 0]  # x, y, z, roll, pitch, yaw - EE pointing down
+    ee_pose: [-1.5, -2.0, 1.0, 1pi, 0, 0]  # x, y, z, roll, pitch, yaw - EE pointing down
     hold_period: 1.0
     tracking_pos_err_tol: 0.05
     tracking_ori_err_tol: 0.05
@@ -46,4 +46,4 @@ include:
 
 logging:
   log_dir: "simple_experiment"
-  log_level: 10 # 0 - not set, 10 - debug, 20 - info
+  log_level: 20 # 0 - not set, 10 - debug, 20 - info

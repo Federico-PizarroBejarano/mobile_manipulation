@@ -1,16 +1,39 @@
 # MPSF Experiment: Joystick Teleop with Obstacles
+#
+# Hardware teleop overlay: global MPC.yaml has shared defaults (static soft-obs RBF v2).
 
 controller:
   base_mask: [false, false, false]
   ee_mask: [false, false, false, false, false, false]
 
+  base_velocity_guard:
+    enabled: true
+
+  cmd_vel_lpf: 0.28                   # heavier output smoothing than MPC.yaml default
+  replan_ff_blend_s: 0.15              # ~3 replans @ 20 Hz; 0.5 lags teleop, 0.05 jerky near obstacles
+
+  collision_safety_margin:
+    static_obstacles: 0.05            # target clearance; soft band extends by zeta
+
+  cost_params:
+    ControlEffort:
+      Qvb: [0.30, 0.30, 0.30]
+      Qub: [0.25, 0.25, 0.25]          # penalize base accel on MPSF-completed DoFs
+
+  low_level_tracking:
+    kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
+
+  teleop:
+    enabled: true
+    enable_button: 13  # d-pad up; same button as the hardware relay deadman
+    ee_yaw_buttons: [14, 15]  # d-pad L/R; verify with test_joystick.py
+    max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
+    max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
+
   mpsf_params:
     objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1)
     decay_rate: 1.0         # Decay factor per time step (0 to 1)
     mpsf_weight_multiplier: 1.0
-    teleop_enabled: True
-    teleop_max_base_vel: [1.0, 1.0, 1.0]  # [vx, vy, vyaw] max velocities
-    teleop_max_ee_vel: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]  # [vx, vy, vz, wx, wy, wz] max EE velocities
     mpsf_base_mask: [true, true, true]
     mpsf_ee_mask: [true, true, true, true, true, true]
 
@@ -18,9 +41,9 @@ controller:
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
 
-  # ACADOS solver option
+  # ACADOS solver option (bump name if you change constraint soft/hard structure)
   acados:
-    name: "MPSF_Joystick_Teleop_With_Obstacles"
+    name: "MPSF_Joystick_Teleop_Obs"
 
 simulation:
   duration: 60
@@ -33,6 +56,7 @@ include:
   - package: "mm_run"
     path: "config/sim/simulation.yaml"
   - package: "mm_run"
+    # path: "config/scene/empty.yaml"
     path: "config/mpsf_experiments/scenes/ee_teleop_obstacles_scene.yaml"
 
 logging:

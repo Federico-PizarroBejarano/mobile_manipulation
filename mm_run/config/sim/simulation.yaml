@@ -12,7 +12,8 @@ simulation:
     num_solver_iterations: 120
 
   robot:
-    home: [0.0, 0.0, 0, 1.5708, -0.7854,  1.5708, -0.7854,  1.5708, 1.3100] # default
+    # Tray-ready: measured arm joints where the gripped plank is level. Base is not part of that measurement.
+    home: [0.0, 0.0, 0, 1.57090235, -1.04724914, 2.09447575, -1.05401260, 1.57079864, 1.28475273]
     tool_vicon_name: ThingContainer
 
   gui: False

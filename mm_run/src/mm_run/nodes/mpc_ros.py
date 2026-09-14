@@ -1,5 +1,6 @@
 import argparse
 import copy
+import datetime
 import logging
 import os
 import sys
@@ -16,8 +17,13 @@ from mobile_manipulation_central.ros_interface import (
     MobileManipulatorROSInterface,
     ViconObjectInterface,
 )
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
+from robotiq_3f_gripper_articulated_msgs.msg import (
+    Robotiq3FGripperRobotInput,
+    Robotiq3FGripperRobotOutput,
+)
 from scipy.spatial.transform import Rotation as Rot
+from sensor_msgs.msg import Joy
 from spatialmath.base import r2q, rpy2r
 from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
 from visualization_msgs.msg import Marker, MarkerArray
@@ -27,9 +33,15 @@ from mm_control.robot import MobileManipulator3D
 from mm_plan.TaskManager import TaskManager
 from mm_run.msg import MpcPlan
 from mm_utils import parsing
+from mm_utils.base_velocity_guard import sanitize_base_velocity
 from mm_utils.enums import RefType
 from mm_utils.logging import DataLogger
 from mm_utils.math import wrap_pi_scalar
+from mm_utils.robotiq_gripper import (
+    GRIPPER_TOGGLE_BUTTON,
+    gripper_position,
+    toggle_gripper_open,
+)
 
 
 class ControllerROSNode:
@@ -116,11 +128,15 @@ class ControllerROSNode:
         self.logger.add("nu", self.ctrl_config["robot"]["dims"]["u"])
         self._nu_cmd = int(self.ctrl_config["robot"]["dims"]["u"])
 
-        # Get shared timestamp from ROS parameter (set by sim node)
-        # Wait for sim node to set it
-        while not rospy.has_param("/experiment_timestamp"):
-            rospy.sleep(0.1)
-        self.session_timestamp = rospy.get_param("/experiment_timestamp")
+        # Shared timestamp from sim_ros when running with the simulator.
+        # On the real robot there is no sim node, so generate one locally.
+        if rospy.has_param("/experiment_timestamp"):
+            self.session_timestamp = rospy.get_param("/experiment_timestamp")
+        else:
+            self.session_timestamp = datetime.datetime.now().strftime(
+                "%Y-%m-%d_%H-%M-%S"
+            )
+            rospy.set_param("/experiment_timestamp", self.session_timestamp)
 
         # ROS Related
         self.robot_interface = MobileManipulatorROSInterface()
@@ -129,13 +145,30 @@ class ControllerROSNode:
         )
 
         self.start_end_button_interface = JoystickButtonInterface(2)  # square
+        # Triangle/Y: raw rising-edge (JoystickButtonInterface re-fires while held).
+        self._gripper_btn = 0
+        self._gripper_btn_prev = 0
+        self._gripper_open = True  # software latch; first press closes if HW is open
+        self._gripper_no_sub_warned = False
+        self._gripper_status = None
+        # Persistent output — open/close only mutates rPRA (avoids re-activation dance).
+        self._gripper_cmd = None
+        self._gripper_pub = rospy.Publisher(
+            "/Robotiq3FGripperRobotOutput",
+            Robotiq3FGripperRobotOutput,
+            queue_size=1,
+        )
+        rospy.Subscriber(
+            "/bluetooth_teleop/joy", Joy, self._gripper_joy_cb, queue_size=1
+        )
+        rospy.Subscriber(
+            "/Robotiq3FGripperRobotInput",
+            Robotiq3FGripperRobotInput,
+            self._gripper_status_cb,
+            queue_size=1,
+        )
 
         self.teleop_enabled = False
-        if self.planner_config.get("use_joy", False):
-            self.use_joy = True
-            self.task_switch_button_interface = JoystickButtonInterface(1)  # circle
-        else:
-            self.use_joy = False
 
         mi = self.controller.model_interface
         self.self_collision_func = mi.getSignedDistanceSymMdls("self")
@@ -176,6 +209,28 @@ class ControllerROSNode:
 
         self.sot_lock = threading.Lock()
 
+        guard_cfg = self.ctrl_config.get("base_velocity_guard", {})
+        self._base_vel_guard_enabled = bool(guard_cfg.get("enabled", False))
+        self._base_vel_guard_max_disagreement = float(
+            guard_cfg.get("max_disagreement", 0.25)
+        )
+        self._base_vel_guard_stale_s = float(guard_cfg.get("stale_s", 0.2))
+        self._odom_twist_body = None
+        self._odom_stamp = None
+        if self._base_vel_guard_enabled:
+            odom_topic = str(guard_cfg.get("odom_topic", "/odometry/filtered"))
+            rospy.Subscriber(
+                odom_topic,
+                Odometry,
+                self._on_odometry_for_guard,
+                queue_size=1,
+            )
+            self.controller_log.info(
+                "Base velocity guard enabled (topic=%s, max_disagreement=%.2f)",
+                odom_topic,
+                self._base_vel_guard_max_disagreement,
+            )
+
         rospy.on_shutdown(self.shutdownhook)
         self.ctrl_c = False
 
@@ -183,6 +238,39 @@ class ControllerROSNode:
         self.ctrl_c = True
         self.robot_interface.brake()
         self.logger.save(session_timestamp=self.session_timestamp)
+
+    def _on_odometry_for_guard(self, msg: Odometry):
+        tw = msg.twist.twist
+        self._odom_twist_body = np.array(
+            [tw.linear.x, tw.linear.y, tw.angular.z], dtype=float
+        )
+        self._odom_stamp = msg.header.stamp
+
+    def _apply_base_velocity_guard(self, q, v):
+        if not self._base_vel_guard_enabled or self._odom_twist_body is None:
+            return q, v
+
+        if self._odom_stamp is None:
+            return q, v
+
+        age = (rospy.Time.now() - self._odom_stamp).to_sec()
+        if age > self._base_vel_guard_stale_s:
+            return q, v
+
+        v_safe, replaced = sanitize_base_velocity(
+            q,
+            v,
+            self._odom_twist_body,
+            self._base_vel_guard_max_disagreement,
+        )
+        if replaced:
+            rospy.logwarn_throttle(
+                1.0,
+                "Base velocity guard: replaced joint_states base vel "
+                "(disagreement > %.2f m/s)",
+                self._base_vel_guard_max_disagreement,
+            )
+        return q, v_safe
 
     def _publish_mpc_plan(self, t, u_bar, v_bar):
         """Publish MPC plan for an external low-level velocity node."""
@@ -472,16 +560,41 @@ class ControllerROSNode:
         marker_rbase.points = [Point(*pt[:2], 0) for pt in controller.rbase_bar]
         self.controller_visualization_pub.publish(marker_rbase)
 
+    def _joint_state_wait_reason(self):
+        """Why robot_interface.ready() is still false, for logs and low-level."""
+        published = {name for name, _ in rospy.get_published_topics()}
+        missing = []
+        if not self.robot_interface.base.ready():
+            missing.append("/ridgeback/joint_states")
+        if not self.robot_interface.arm.ready():
+            missing.append("/ur10/joint_states")
+        details = []
+        for topic in missing:
+            if topic in published:
+                details.append(f"{topic} is published but no usable message received")
+            else:
+                details.append(
+                    f"{topic} has no publisher (thing.launch / vicon / UR10?)"
+                )
+        return "; ".join(details)
+
     def run(self):
         rate = rospy.Rate(self._mpc_loop_hz)
 
         print("-----Checking Robot Interface-----")
+        robot_wait_t0 = 0.0
         while not self.robot_interface.ready():
             self.robot_interface.brake()
+            if time.perf_counter() - robot_wait_t0 > 5.0:
+                reason = self._joint_state_wait_reason()
+                rospy.set_param("/controller_wait_reason", reason)
+                rospy.loginfo("Waiting for joint states: %s", reason)
+                robot_wait_t0 = time.perf_counter()
             rate.sleep()
 
             if rospy.is_shutdown():
                 return
+        rospy.set_param("/controller_wait_reason", "")
         print("Controller received joint states. Proceed ... ")
         self.home = self.robot_interface.q
 
@@ -532,31 +645,16 @@ class ControllerROSNode:
             )
 
         print("-----Checking Joy stick messages----- ")
-        if self.use_joy:
-            # Check if teleop mode is enabled (uses direct joystick subscription, not JoystickButtonInterface)
-            if self.teleop_enabled:
-                # In teleop mode, we use direct joystick subscription, so skip the interface check
-                print("Teleop mode enabled - using direct joystick subscription.")
-            elif self.task_switch_button_interface.ready():
-                print("Received joystick msg. Using joystick data.")
-            else:
-                raise Exception("Joystick not ready")
+        if self.start_end_button_interface.ready():
+            print("Received joystick msg on /bluetooth_teleop/joy.")
+        else:
+            print("No joystick msg yet (Square/Triangle optional if it appears later).")
 
         if self._viz_enabled and self._viz_rate > 0.0:
             viz_period = 1.0 / self._viz_rate
             rospy.Timer(rospy.Duration.from_sec(viz_period), self._publish_planner_data)
 
-        if self.use_joy:
-            print("----- Press start button (Square/PS4 or X/XBOX) to start -----")
-            while not self.start_end_button_interface.button == 1:
-                rate.sleep()
-
-            self.start_end_button_interface.reset_button()
-        else:
-            if sys.stdin.isatty():
-                input("----- Press Enter to start -----")
-            else:
-                print("----- Non-interactive start: skipping Enter prompt -----")
+        self._wait_for_start(rate)
 
         self.sot.activatePlanners()
         t = rospy.Time.now().to_sec()
@@ -578,7 +676,9 @@ class ControllerROSNode:
             )
 
             # open-loop command
-            robot_states = (self.robot_interface.q, self.robot_interface.v)
+            q_raw, v_raw = self.robot_interface.q, self.robot_interface.v
+            q, v = self._apply_base_velocity_guard(q_raw, v_raw)
+            robot_states = (q, v)
 
             # Emergency stop. Braking cannot restore clearance, so this is
             # terminal: continuing would re-trip every cycle forever.
@@ -677,14 +777,9 @@ class ControllerROSNode:
                 "base": {"pose": base_pose, "velocity": base_vel},
                 "EE": {"pose": ee_pose, "velocity": ee_vel},
             }
-            if self.use_joy:
-                self.task_switch_button_interface.button_lock.acquire()
-                button = self.task_switch_button_interface.button
-                self.task_switch_button_interface.button_lock.release()
-                states["joy"] = button
 
             self.sot_lock.acquire()
-            updated, _ = self.sot.update(
+            self.sot.update(
                 t - t0,
                 states,
                 base_mask=self.controller.base_mask,
@@ -701,9 +796,6 @@ class ControllerROSNode:
             # Signal that controller has finished all tasks
             if all_finished:
                 rospy.set_param("/controller_finished", True)
-
-            if self.use_joy and updated:
-                self.task_switch_button_interface.reset_button()
 
             # Hook / MPSF metrics: MPC preview velocity at first horizon knot (same row
             # as in MpcPlan). low_level_cmd_node may integrate/interpolate between solves.
@@ -767,10 +859,109 @@ class ControllerROSNode:
                     self.logger.append("v_bw_w_ds", v_bw_wd[:2])
                     self.logger.append("ω_bw_w_ds", v_bw_wd[2])
 
-            if self.use_joy and self.start_end_button_interface.button == 1:
+            self._poll_gripper_toggle()
+            if self.start_end_button_interface.button == 1:
+                self.start_end_button_interface.reset_button()
                 break
 
             self._end_mpc_cycle(cycle_t0, mpc_period, rate)
+
+    def _wait_for_start(self, rate):
+        """Start on Square (controller) and/or Enter when a TTY is available.
+
+        Non-interactive (no TTY): wait for Square if joy is already publishing,
+        otherwise start immediately so CI/sim without a pad does not hang.
+        """
+        self.start_end_button_interface.reset_button()
+        enter_pressed = threading.Event()
+
+        if sys.stdin.isatty():
+            print("----- Press Square (controller) or Enter to start -----")
+
+            def _wait_enter():
+                try:
+                    input()
+                    enter_pressed.set()
+                except EOFError:
+                    pass
+
+            threading.Thread(target=_wait_enter, daemon=True).start()
+        elif self.start_end_button_interface.ready():
+            print("----- Press Square (controller) to start -----")
+        else:
+            print("----- Non-interactive start: skipping prompt -----")
+            return
+
+        while not self.ctrl_c and not rospy.is_shutdown():
+            if self.start_end_button_interface.button == 1:
+                self.start_end_button_interface.reset_button()
+                return
+            if enter_pressed.is_set():
+                return
+            rospy.loginfo_throttle(
+                5.0,
+                "Waiting for Square (button 2) or Enter to start ...",
+            )
+            rate.sleep()
+
+        raise rospy.ROSInterruptException("shutdown while waiting to start")
+
+    def _gripper_joy_cb(self, msg):
+        if GRIPPER_TOGGLE_BUTTON < len(msg.buttons):
+            self._gripper_btn = int(msg.buttons[GRIPPER_TOGGLE_BUTTON])
+
+    def _gripper_status_cb(self, msg):
+        self._gripper_status = msg
+
+    def _ensure_gripper_cmd(self):
+        """Keep one Robotiq output message; only rPRA changes on later toggles."""
+        if self._gripper_cmd is not None:
+            return self._gripper_cmd
+        cmd = Robotiq3FGripperRobotOutput()
+        cmd.rACT = 1
+        cmd.rGTO = 1
+        cmd.rATR = 0
+        cmd.rICF = 0
+        cmd.rSPA = 255
+        cmd.rFRA = 150
+        # Preserve current mode so we do not force a mode-change finger dance.
+        if self._gripper_status is not None:
+            cmd.rMOD = int(self._gripper_status.gMOD)
+            cmd.rPRA = int(self._gripper_status.gPRA)
+        else:
+            cmd.rMOD = 0
+            cmd.rPRA = gripper_position(self._gripper_open)
+        self._gripper_cmd = cmd
+        return cmd
+
+    def _poll_gripper_toggle(self):
+        """Rising-edge Triangle/Y: toggle open/close via rPRA only."""
+        pressed = self._gripper_btn == 1
+        rising = pressed and not self._gripper_btn_prev
+        self._gripper_btn_prev = pressed
+        if not rising:
+            return
+
+        if self._gripper_pub.get_num_connections() == 0:
+            if not self._gripper_no_sub_warned:
+                self.controller_log.warning(
+                    "Gripper toggle ignored: no subscribers on "
+                    "/Robotiq3FGripperRobotOutput (driver down or sim)"
+                )
+                self._gripper_no_sub_warned = True
+            return
+
+        cmd = self._ensure_gripper_cmd()
+        self._gripper_open = toggle_gripper_open(self._gripper_open)
+        cmd.rPRA = gripper_position(self._gripper_open)
+        # Stay active and go-to-position; do not rewrite activation/mode each press.
+        cmd.rACT = 1
+        cmd.rGTO = 1
+        self._gripper_pub.publish(cmd)
+        self.controller_log.info(
+            "Gripper %s (Triangle/Y)",
+            "open" if self._gripper_open else "closed",
+        )
 
     def go_home(self):
         rate = rospy.Rate(125)

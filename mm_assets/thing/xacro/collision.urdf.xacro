@@ -47,9 +47,9 @@
   </xacro:macro>
 
   <!-- Collision sphere for the base -->
-  <xacro:collision_link_sphere name="base_collision_link" radius="0.55"/>
+  <xacro:collision_link_sphere name="base_collision_link" radius="0.49"/>
   <joint name="base_collision_joint" type="fixed">
-    <origin rpy="0 0 0" xyz="0 0 -0.08"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
     <parent link="base_link"/>
     <child link="base_collision_link"/>
   </joint>

@@ -109,7 +109,7 @@ controller:
   ros_visualization_enabled: true
   ros_visualization_rate: 5.0     # Hz; 0 disables the planner marker timer
 
-  # ROS: controller.launch starts mpc_ros or mpsf_ros (MpcPlan) + low_level_cmd_node (cmd_vel).
+  # ROS: controller.launch starts plan node (teleop:=none|mpsf|direct) + low_level_cmd_node (cmd_vel).
   # e.g. via run.launch or: roslaunch mm_run controller.launch config:=...
   low_level_tracking:
     enabled: true
@@ -141,10 +141,10 @@ controller:
     self: "SignedDistanceConstraint"
     static_obstacles: "SignedDistanceConstraint"
 
-  # Safety margins [m]
+  # Safety margins [m] (d_safe for soft static obstacles; see collision_soft zeta)
   collision_safety_margin:
     self: 0.25
-    static_obstacles: 0.15
+    static_obstacles: 0.05
 
   # Soft constraints
   collision_constraints_softened:
@@ -167,8 +167,17 @@ controller:
     zeta: 0.005                   # Penalty scaling
   collision_soft:
     self: {mu: 0.0001, zeta: 0.005}
-    static_obstacles: {mu: 0.0001, zeta: 0.005}
+    static_obstacles: {mu: 0.03, zeta: 0.10}  # see docs/mpc/cost_functions.md §6
 ```
+
+Static soft obstacles: `d_safe` (`collision_safety_margin.static_obstacles`) is the
+**target** clearance; `zeta` is the **planning influence** beyond that target. Cost is
+zero when signed distance `sd >= d_safe + zeta`. With defaults `d_safe=0.05`,
+`zeta=0.10`, the optimizer starts shaping paths once predicted clearance drops below
+**15 cm**, not at the last millimetre before the margin.
+
+`mu` sets barrier strength once inside that band (raise if teleop tracking still wins).
+Changing `d_safe`, `mu`, or `zeta` requires an acados recompile (`acados.name` bump).
 
 ### Cost Function Weights
 
@@ -421,6 +430,40 @@ controller:
       args:
         obstacle_params_file: str
 ```
+
+
+## Joystick Teleop (MPSF and direct)
+
+Stick settings live under `controller.teleop` (shared by `mpsf_ros` and `direct_teleop_ros`).
+Launch selects the plan node with `teleop:=mpsf|direct|none` (`controller.launch` / `run.launch` / `hardware_teleop.launch`).
+
+```yaml
+controller:
+  teleop:
+    enabled: true
+    enable_button: 13         # d-pad up — hardware deadman and stick enable
+    ee_yaw_buttons: [14, 15]  # d-pad L/R for EE yaw
+    max_base_vel: [0.3, 0.3, 0.3]
+    max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
+
+  mpsf_params:                # MPSF-only (ignored by direct teleop)
+    mpsf_weight_multiplier: 0.45
+    goal_velocity:            # goal-following when teleop.enabled is false
+      max_base_vel: [0.3, 0.3, 0.3]
+      max_ee_vel: [0.15, 0.15, 0.15, 0.3, 0.3, 0.3]
+      base_threshold: [0.3, 0.3, 0.3]
+      ee_threshold: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3]
+```
+
+- **`teleop:=mpsf`**: sticks → `desired_velocity` → MPC (collision / upright / shared control).
+- **`teleop:=direct`**: sticks → synthetic `MpcPlan` (base joint rates, or arm-only differential IK in EE mode). No OCP.
+- Both publish `MpcPlan` to `low_level_cmd_node` (same LPF / stale). Gate param: `/teleop_sticks_active`.
+
+Other relevant keys: `replan_ff_blend_s` (default `0.4`), `cmd_vel_lpf` (default `0.35`).
+
+Examples: `joystick_teleop_with_obstacles.yaml` (MPSF), `direct_teleop.yaml` (direct). See `config/teleop/README.md`.
+
+Joystick topic is **`/bluetooth_teleop/joy`**. Square/Enter start; Triangle gripper; d-pad up enable. Hardware relay (`joy_stick_relay.py`) also gates motor cmd topics on button 13.
 
 
 ## Logging
