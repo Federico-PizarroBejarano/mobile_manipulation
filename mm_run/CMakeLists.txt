@@ -30,5 +30,6 @@ catkin_install_python(
     src/mm_run/nodes/low_level_cmd_node.py
     src/mm_run/nodes/mpsf_ros.py
     src/mm_run/nodes/direct_teleop_ros.py
+    src/mm_run/nodes/rl_teleop_ros.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

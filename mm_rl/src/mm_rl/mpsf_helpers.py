@@ -6,9 +6,10 @@ evaluation scripts and tests do not import each other.
 
 import numpy as np
 
+from mm_utils import math as mm_math
 from mm_utils import parsing
 from mm_utils.diff_ik import build_ik_params_from_config  # noqa: F401
-from mm_utils.diff_ik import solve_diff_ik
+from mm_utils.diff_ik import solve_diff_ik, spatial_jacobian
 from mm_utils.parsing import recursive_dict_update
 
 
@@ -115,18 +116,34 @@ def generate_goal(pos_range, orn_range, np_random):
     return goal_pos, goal_orn
 
 
-def solve_ik(robot, desired_ee_vel, base_vel, ik_params):
-    """Compute joint velocities via Jacobian IK (wrapper around ``solve_diff_ik``).
+def solve_ik(robot_mdl, q, desired_ee_vel_world, base_vel, ik_params):
+    """Compute joint velocities via Casadi spatial Jacobian IK.
+
+    Converts world-frame angular velocity to body frame to match
+    ``MobileManipulator3D`` spatial Jacobian convention, then calls
+    :func:`solve_diff_ik`.
 
     Args:
-        robot: Simulator robot with ``joint_states()`` and ``jacobian(q)``.
-        desired_ee_vel (ndarray): 6D EE twist matching ``robot.jacobian`` rows.
+        robot_mdl: ``MobileManipulator3D`` instance.
+        q (ndarray): Joint configuration, shape ``(nq,)``.
+        desired_ee_vel_world (ndarray): 6D EE twist (world linear + world angular).
         base_vel (ndarray): Base velocities ``[vx, vy, vyaw]`` (3,).
         ik_params (dict): From :func:`build_ik_params_from_config`.
 
     Returns:
         ndarray: Joint velocity command ``u`` of shape ``(nu,)``.
     """
-    q, _ = robot.joint_states()
-    J = robot.jacobian(q)
-    return solve_diff_ik(J, desired_ee_vel, base_vel, ik_params)
+    q = np.asarray(q, dtype=float).reshape(-1)
+    tw = np.asarray(desired_ee_vel_world, dtype=float).reshape(6)
+    _, ee_orn = robot_mdl.getEE(q)
+    _, twist_ik = mm_math.ee_twist_world_and_mpc_reference(
+        tw[:3],
+        tw[3:],
+        ee_orn,
+        clamp_limits=(
+            float(ik_params.get("ee_max_linear_vel", 0.5)),
+            float(ik_params.get("ee_max_angular_vel", 0.75)),
+        ),
+    )
+    J = spatial_jacobian(robot_mdl, q)
+    return solve_diff_ik(J, twist_ik, base_vel, ik_params)

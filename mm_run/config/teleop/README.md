@@ -99,12 +99,13 @@ All joystick consumers use **`/bluetooth_teleop/joy`** (deadman relay, Square/Tr
 - **Real robot:** use the existing lab / Clearpath joy publisher (already `/bluetooth_teleop/joy`).
 - **Sim / no joy yet:** `roslaunch mm_run teleop.launch` starts a `joy_node` under `bluetooth_teleop`.
 
-Launch arg **`teleop:=mpsf|direct|none`** selects the plan publisher (`mpsf_ros`, `direct_teleop_ros`, or `mpc_ros`).
+Launch arg **`teleop:=mpsf|direct|rl|none`** selects the plan publisher (`mpsf_ros`, `direct_teleop_ros`, `rl_teleop_ros`, or `mpc_ros`).
 
 | Mode | Config example | Behavior |
 |------|----------------|----------|
 | `mpsf` | `joystick_teleop_with_obstacles.yaml` | Sticks → MPC desired velocity (collision-aware) |
 | `direct` | `direct_teleop.yaml` | Sticks → synthetic `MpcPlan` (base twist or arm diff-IK) |
+| `rl` | `rl_teleop.yaml` | Sticks → EE (MoMa integrate); SAC policy → base; diff-IK → `MpcPlan` |
 | `none` | waypoint experiments | Standard MPC, no stick teleop |
 
 ### Launch checklist (real robot)
@@ -127,12 +128,32 @@ roslaunch mm_run hardware_teleop.launch teleop:=direct \
   config:=$(rospack find mm_run)/config/mpsf_experiments/direct_teleop.yaml
 ```
 
+**Or RL teleop (EE sticks + learned base; requires trained checkpoint):**
+```bash
+roslaunch mm_run hardware_teleop.launch teleop:=rl \
+  config:=$(rospack find mm_run)/config/mpsf_experiments/rl_teleop.yaml
+```
+Retrain after the Casadi / limit changes before expecting good transfer:
+```bash
+cd ~/catkin_ws/src/mobile_manipulation
+python3 -m mm_rl.train -c mm_rl/config/train_config.yaml --checkpoint_dir checkpoints
+```
+Set `rl.checkpoint` in `rl_teleop.yaml` or pass `--checkpoint /path/to/final_model.pth` on the node.
+
 (`joystick` defaults to `false` so a second `joy_node` is not started.) If joy is missing, add `joystick:=true controller_type:=ps4`.
 
 Or launch controller only:
 ```bash
 roslaunch mm_run run.launch teleop:=mpsf config:=.../joystick_teleop_with_obstacles.yaml
 roslaunch mm_run run.launch teleop:=direct config:=.../direct_teleop.yaml
+roslaunch mm_run run.launch teleop:=rl config:=.../rl_teleop.yaml
+```
+
+### Sim RL teleop
+```bash
+roslaunch mm_run teleop.launch
+roslaunch mm_run run_pybullet_sim.launch teleop:=rl gui:=True \
+  config:=$(rospack find mm_run)/config/mpsf_experiments/rl_teleop.yaml
 ```
 
 ### Button map (PS4 / Xbox)
@@ -144,7 +165,7 @@ roslaunch mm_run run.launch teleop:=direct config:=.../direct_teleop.yaml
 | R1 / RB | 5 | 5 | Clearpath teleop — **do not hold during mm teleop** |
 | Circle / B | 1 | 1 | Unused |
 | Triangle / Y | 3 | 3 | Toggle gripper open / close (normal mode) |
-| Cross / A | 0 | 0 | Toggle base ↔ EE teleop mode |
+| Cross / A | 0 | 0 | Toggle base ↔ EE teleop mode (`mpsf`/`direct` only; unused in `rl`) |
 | Square / X | 2 | 2 | Start / stop experiment |
 | D-pad L / R | 14 / 15 | 14 / 15 | EE yaw |
 

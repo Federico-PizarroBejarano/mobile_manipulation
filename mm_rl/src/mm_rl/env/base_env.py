@@ -6,9 +6,15 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from mm_control.robot import MobileManipulator3D
 from mm_rl.env.ee_planner import EEPlanner
 from mm_simulator.simulation import BulletSimulation
 from mm_utils import math as mm_math
+from mm_utils.diff_ik import (
+    build_ik_params_from_config,
+    solve_diff_ik,
+    spatial_jacobian,
+)
 
 
 class BaseRLEnv(gym.Env):
@@ -39,6 +45,20 @@ class BaseRLEnv(gym.Env):
         self.nv = self.sim.robot.nv  # Number of joint velocities
         self.nu = self.sim.robot.nu  # Number of inputs
 
+        # Casadi kinematics (same model as hardware teleop / MPC)
+        ctrl = dict(config.get("controller", {}))
+        if "dt" not in ctrl:
+            ctrl["dt"] = float(self.sim_config.get("timestep", 0.03))
+        self.robot_mdl = MobileManipulator3D(ctrl)
+        self.ik_params = build_ik_params_from_config(config, self.nu, self.nq)
+        # Mutable mirrors for tests / sweeps (synced into ik_params in _solve_ik)
+        self.ik_regularization_strength = float(
+            self.ik_params["regularization_strength"]
+        )
+        self.use_weighted_regularization = bool(
+            self.ik_params["use_weighted_regularization"]
+        )
+
         # Action space: N²M² approach - 3D action space
         # [base_x, base_y, base_yaw]
         # All actions in range [-1, 1], will be scaled appropriately
@@ -68,21 +88,24 @@ class BaseRLEnv(gym.Env):
         self.ee_max_angular_vel = float(
             robot_overrides.get("ee_angular_vel_limit", 0.75)
         )
+        # Keep ik_params EE clamps in sync with robot overrides
+        self.ik_params["ee_max_linear_vel"] = self.ee_max_linear_vel
+        self.ik_params["ee_max_angular_vel"] = self.ee_max_angular_vel
 
         # Clamp joint velocities to limits from config
         velocity_limits = self.robot_config.get("limits").get("state")
         self.joint_vel_lower = np.array(velocity_limits["lower"][self.nq :])
         self.joint_vel_upper = np.array(velocity_limits["upper"][self.nq :])
 
-        # IK solver parameters (N²M² paper: minimum displacement regularization)
-        ik_config = config.get("ik", {})
-        self.ik_regularization_strength = ik_config.get("regularization_strength", 0.1)
-        self.use_weighted_regularization = ik_config.get(
-            "use_weighted_regularization", True
-        )
-
         planner_config = config.get("planner", {})
         self.planner_max_linear_speed = float(planner_config["max_linear_speed"])
+
+        goal_config = config.get("goal", {})
+        self.obs_horizon_m = float(goal_config.get("obs_horizon_m", 1.5))
+
+        reset_config = config.get("reset", {})
+        self.base_xy_noise = float(reset_config.get("base_xy_noise", 0.0))
+        self.randomize_yaw = bool(reset_config.get("randomize_yaw", False))
 
         # End-effector planner (will be initialized in reset)
         self.ee_planner = None
@@ -127,6 +150,24 @@ class BaseRLEnv(gym.Env):
         """
         return 6 + 12 + 12 + 12 + self.nq + self.action_space.shape[0]
 
+    def _ee_pose_w(self, q=None):
+        """Casadi tool pose in world frame."""
+        if q is None:
+            q, _ = self.sim.robot.joint_states()
+        return self.robot_mdl.getEE(np.asarray(q, dtype=float).reshape(-1))
+
+    def _base_pose_w(self, q=None):
+        """Base pose in world frame from planar ``q[:3]``."""
+        if q is None:
+            q, _ = self.sim.robot.joint_states()
+        q = np.asarray(q, dtype=float).reshape(-1)
+        yaw = float(q[2])
+        base_pos = np.array([q[0], q[1], 0.0], dtype=np.float64)
+        base_orn = np.array(
+            [0.0, 0.0, np.sin(yaw / 2.0), np.cos(yaw / 2.0)], dtype=np.float64
+        )
+        return base_pos, base_orn
+
     def _get_observation(self):
         """Get current observation matching paper structure.
 
@@ -134,7 +175,7 @@ class BaseRLEnv(gym.Env):
         - v_{ee}: EE velocities from planner (6D: linear + angular in base frame)
         - ee: current EE pose (12D: position + rotation matrix in base frame)
         - \hat{ee}: desired EE pose from planner (12D: position + rotation matrix in base frame)
-        - g: goal pose (12D: position + rotation matrix in base frame)
+        - g: goal pose capped at ``obs_horizon_m`` along the planner path (base frame)
         - s_{robot}: joint positions (nq)
         - a_{t-1}: previous action (action_dim)
 
@@ -144,11 +185,9 @@ class BaseRLEnv(gym.Env):
         # Get joint states (only positions, not velocities)
         q, _ = self.sim.robot.joint_states()
 
-        # Get end-effector pose in world frame
-        ee_pos_w, ee_orn_w = self.sim.robot.link_pose()  # Tool link
-
-        # Get base pose in world frame
-        base_pos_w, base_orn_w = self.sim.robot.link_pose(link_idx=-1)  # Base link
+        # Casadi FK (matches hardware)
+        ee_pos_w, ee_orn_w = self._ee_pose_w(q)
+        base_pos_w, base_orn_w = self._base_pose_w(q)
 
         # Transform current end-effector pose to base frame
         ee_pos_b, ee_orn_b = self._world_to_base_frame(
@@ -164,9 +203,10 @@ class BaseRLEnv(gym.Env):
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Use final goal (original behavior)
+        # Subgoal g: at most obs_horizon_m along the planner path from current s
+        goal_pos_w, goal_orn_w = self.ee_planner.pose_at_horizon(self.obs_horizon_m)
         goal_pos_b, goal_orn_b = self._world_to_base_frame(
-            self.goal_pos, self.goal_orn, base_pos_w, base_orn_w
+            goal_pos_w, goal_orn_w, base_pos_w, base_orn_w
         )
 
         # Get EE velocities (v_{ee}) from planner command (teleoperator), not actual robot velocity
@@ -193,10 +233,10 @@ class BaseRLEnv(gym.Env):
                 mm_math.quat_to_rot(
                     desired_ee_orn_b
                 ).flatten(),  # \hat{ee}: desired EE rotation matrix (9D)
-                goal_pos_b,  # g: goal position (3D)
+                goal_pos_b,  # g: horizon-capped goal position (3D)
                 mm_math.quat_to_rot(
                     goal_orn_b
-                ).flatten(),  # g: goal rotation matrix (9D)
+                ).flatten(),  # g: horizon-capped goal rotation matrix (9D)
                 q,  # s_{robot}: joint positions (nq)
                 self.prev_action,  # a_{t-1}: previous action (action_dim)
             ]
@@ -240,8 +280,14 @@ class BaseRLEnv(gym.Env):
         """
         super().reset(seed=seed)
 
-        # Reset simulation
-        self.sim.robot.reset_joint_configuration(self.sim.robot.home)
+        # Reset to home, then lightly randomize base pose
+        q = np.asarray(self.sim.robot.home, dtype=float).copy()
+        if self.base_xy_noise > 0.0:
+            q[0] += self.np_random.uniform(-self.base_xy_noise, self.base_xy_noise)
+            q[1] += self.np_random.uniform(-self.base_xy_noise, self.base_xy_noise)
+        if self.randomize_yaw:
+            q[2] = self.np_random.uniform(0.0, 2.0 * np.pi)
+        self.sim.robot.reset_joint_configuration(q)
 
         # Reset step counter
         self.current_step = 0
@@ -255,7 +301,7 @@ class BaseRLEnv(gym.Env):
         )
 
         # Initialize/reset end-effector planner if goal is set
-        ee_pos, ee_orn = self.sim.robot.link_pose()
+        ee_pos, ee_orn = self._ee_pose_w(q)
         self.ee_planner = EEPlanner(
             self.goal_pos,
             self.goal_orn,
@@ -268,6 +314,7 @@ class BaseRLEnv(gym.Env):
 
         # Initialize desired EE velocity (zero for first observation)
         self.desired_ee_vel = np.zeros(6, dtype=np.float32)  # [lin_vel(3), ang_vel(3)]
+        self.prev_action = np.zeros(self.action_space.shape[0], dtype=np.float32)
 
         # Get initial observation
         obs = self._get_observation()
@@ -296,7 +343,8 @@ class BaseRLEnv(gym.Env):
 
         # Get desired end-effector velocity from planner (teleoperator command)
         if self.planner_mode == "closed_loop":
-            ee_pos_now, ee_orn_now = self.sim.robot.link_pose()
+            q_now, _ = self.sim.robot.joint_states()
+            ee_pos_now, ee_orn_now = self._ee_pose_w(q_now)
             desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step(
                 ee_pos_now, ee_orn_now
             )
@@ -304,7 +352,7 @@ class BaseRLEnv(gym.Env):
             desired_ee_lin_vel, desired_ee_ang_vel = self.ee_planner.step()
         desired_ee_vel = np.concatenate([desired_ee_lin_vel, desired_ee_ang_vel])  # 6D
 
-        # Store desired velocity for observation
+        # Store desired velocity for observation (world frame)
         self.desired_ee_vel = desired_ee_vel.copy()
 
         # Solve IK to get joint velocities using desired velocity directly
@@ -324,7 +372,8 @@ class BaseRLEnv(gym.Env):
         obs = self._get_observation()
 
         # Slack-based failure count (modulation_rl-style: cumulative, no reset when back within slack)
-        ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
+        q, _ = self.sim.robot.joint_states()
+        ee_pos_w, ee_orn_w = self._ee_pose_w(q)
         desired_ee_pos_w, desired_ee_orn_w = self.ee_planner.get_desired_pose()
         pos_deviation = np.linalg.norm(ee_pos_w - desired_ee_pos_w)
         orn_deviation = mm_math.quat_orientation_error(ee_orn_w, desired_ee_orn_w)
@@ -400,90 +449,35 @@ class BaseRLEnv(gym.Env):
     ):
         """Solve inverse kinematics to get joint velocities.
 
-        Uses Jacobian-based IK with minimum displacement regularization weighted by
-        maximum joint velocities (N²M² paper approach). This prefers solutions that
-        keep joints close to their current positions, with faster joints penalized less.
+        Uses Casadi spatial Jacobian + shared :func:`solve_diff_ik`. Planner twists
+        are world-frame; angular part is converted to body frame to match the
+        spatial Jacobian convention.
 
         Args:
-            desired_ee_vel: Desired end-effector velocity [lin_vel(3), ang_vel(3)] in world frame (6,)
+            desired_ee_vel: Desired end-effector velocity [lin_vel(3), ang_vel(3)]
+                in world frame (6,)
             base_vel: Base velocities [x, y, yaw] (3,)
 
         Returns:
             ndarray: Joint velocities (nu,)
         """
-        # Get current joint state
         q, _ = self.sim.robot.joint_states()
-
-        desired_ee_vel_clamped = mm_math.clamp_ee_velocity(
-            desired_ee_vel, self.ee_max_linear_vel, self.ee_max_angular_vel
+        q = np.asarray(q, dtype=float).reshape(-1)
+        self.ik_params["regularization_strength"] = float(
+            self.ik_regularization_strength
         )
-
-        # Get Jacobian
-        J = self.sim.robot.jacobian(q)
-
-        # For Thing robot with omnidirectional base:
-        # Joint 0: x_to_world_joint (base x translation)
-        # Joint 1: y_to_x_joint (base y translation)
-        # Joint 2: base_to_y_joint (base yaw rotation)
-        # Joints 3-8: arm joints
-
-        # Base joint indices: [x, y, yaw] -> joints [0, 1, 2]
-        base_joint_indices = [0, 1, 2]
-
-        # Compute contribution of base velocities to end-effector velocity
-        J_base = J[:, base_joint_indices]
-        v_ee_from_base = J_base @ base_vel
-
-        # Remaining desired velocity for arm to achieve
-        v_ee_arm_desired = desired_ee_vel_clamped - v_ee_from_base
-
-        # Solve for arm joint velocities
-        arm_joint_indices = list(range(3, self.nu))  # Arm joints (3-8)
-        J_arm = J[:, arm_joint_indices]
-
-        if self.use_weighted_regularization:
-            # N²M² paper approach: minimum displacement regularization weighted by 1/max_velocity
-            # Minimize: ||J_arm * q_dot - v_ee_arm_desired||² + λ * ||W * q_dot||²
-            # where W_ii = 1 / max_vel_i
-
-            # Get max velocities for arm joints
-            max_vels_arm = self.joint_vel_upper[arm_joint_indices]
-            # Avoid division by zero and ensure positive values
-            max_vels_arm = np.maximum(np.abs(max_vels_arm), 1e-6)
-
-            # Build weight matrix: W_ii = 1 / max_vel_i
-            # This means faster joints (higher max_vel) get less penalty
-            W = np.diag(1.0 / max_vels_arm)
-
-            # Weighted regularization term: W^T * W (since W is diagonal, this is W^2)
-            W_squared = W.T @ W
-
-            # Solve: (J_arm^T * J_arm + λ * W^T * W) * q_dot = J_arm^T * v_ee_arm_desired
-            A = J_arm.T @ J_arm + self.ik_regularization_strength * W_squared
-            b = J_arm.T @ v_ee_arm_desired
-
-            # Use pseudo-inverse for numerical stability
-            arm_vel = np.linalg.pinv(A) @ b
-        else:
-            # Fallback to simple damped least squares (original approach)
-            damping = 0.01
-            J_arm_pinv = J_arm.T @ np.linalg.inv(
-                J_arm @ J_arm.T + damping * np.eye(J_arm.shape[0])
-            )
-            arm_vel = J_arm_pinv @ v_ee_arm_desired
-
-        # Combine all joint velocities
-        joint_velocities = np.zeros(self.nu)
-        joint_velocities[base_joint_indices] = base_vel
-        joint_velocities[arm_joint_indices] = arm_vel
-
-        # Clip to limits
-        for i in range(self.nu):
-            joint_velocities[i] = np.clip(
-                joint_velocities[i], self.joint_vel_lower[i], self.joint_vel_upper[i]
-            )
-
-        return joint_velocities
+        self.ik_params["use_weighted_regularization"] = bool(
+            self.use_weighted_regularization
+        )
+        _, ee_orn_w = self._ee_pose_w(q)
+        _, twist_for_ik = mm_math.ee_twist_world_and_mpc_reference(
+            desired_ee_vel[:3],
+            desired_ee_vel[3:],
+            ee_orn_w,
+            clamp_limits=(self.ee_max_linear_vel, self.ee_max_angular_vel),
+        )
+        J = spatial_jacobian(self.robot_mdl, q)
+        return solve_diff_ik(J, twist_for_ik, base_vel, self.ik_params)
 
     def _compute_reward(self, action, prev_action):
         """Compute reward. Override in subclasses.

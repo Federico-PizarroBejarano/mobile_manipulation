@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- Plan node publishes mm_run/MpcPlan; low_level_cmd_node publishes cmd_vel.
-     teleop:=none → mpc_ros | mpsf → mpsf_ros | direct → direct_teleop_ros -->
+     teleop:=none → mpc_ros | mpsf → mpsf_ros | direct → direct_teleop_ros | rl → rl_teleop_ros -->
 
 <launch>
   <!-- acados (HPIPM): if Python fails to load the solver with an undefined symbol from libhpipm,
@@ -10,7 +10,7 @@
   <arg name="ctrl_config" default="default" doc="alternative controller config overwriting the one in config"/>
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
-  <arg name="teleop" default="none" doc="direct|mpsf|none — which plan publisher to run"/>
+  <arg name="teleop" default="none" doc="direct|mpsf|rl|none — which plan publisher to run"/>
   <arg name="mpc_plan_topic" default="/mpc_plan" doc="topic for mm_run/MpcPlan between plan and low-level nodes"/>
   <arg name="record_bag" default="false" doc="record rosbag on Square/Enter start, stop on Square/shutdown"/>
   <arg name="bag_all" default="false" doc="if true, record all topics (trial_all.bag) instead of curated set"/>
@@ -24,6 +24,11 @@
     <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
   </node>
   <node if="$(eval arg('teleop') == 'direct')" pkg="mm_run" type="direct_teleop_ros.py" name="controller_direct_teleop" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)">
+    <param name="record_bag" value="$(arg record_bag)"/>
+    <param name="bag_all" value="$(arg bag_all)"/>
+    <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
+  </node>
+  <node if="$(eval arg('teleop') == 'rl')" pkg="mm_run" type="rl_teleop_ros.py" name="controller_rl_teleop" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)">
     <param name="record_bag" value="$(arg record_bag)"/>
     <param name="bag_all" value="$(arg bag_all)"/>
     <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>

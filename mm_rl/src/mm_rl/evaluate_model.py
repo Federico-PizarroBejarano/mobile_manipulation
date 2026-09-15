@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 import mm_control.MPC as MPC
+from mm_control.robot import MobileManipulator3D
 from mm_rl.env.ee_planner import EEPlanner
 from mm_rl.env.simple_goal_env import SimpleGoalEnv
 from mm_rl.evaluate_experiment import EpisodeTelemetry, print_report
@@ -196,7 +197,14 @@ def run_mpsf_episode(
 
         if use_ik_solver and v_bar is not None:
             mpc_base = v_bar[1, :3]
-            u = solve_ik(robot, desired_ee_vel_world, mpc_base, ik_params)
+            q_ik, _ = robot.joint_states()
+            u = solve_ik(
+                mpsf_runtime["robot_mdl"],
+                q_ik,
+                desired_ee_vel_world,
+                mpc_base,
+                ik_params,
+            )
         elif v_bar is not None:
             u = v_bar[1, :]
         else:
@@ -261,10 +269,15 @@ def create_mpsf_runtime(config):
     timestamp = datetime.datetime.now()
     controller = MPC.MPC(ctrl_config)
     sim = simulation.BulletSimulation(sim_config, timestamp, cli_args=None)
+    ctrl_for_mdl = dict(ctrl_config)
+    if "dt" not in ctrl_for_mdl:
+        ctrl_for_mdl["dt"] = float(sim_config["timestep"])
+    robot_mdl = MobileManipulator3D(ctrl_for_mdl)
     return {
         "config": config,
         "sim": sim,
         "robot": sim.robot,
+        "robot_mdl": robot_mdl,
         "controller": controller,
         "nu": nu,
         "ik_params": ik_params,
@@ -315,7 +328,7 @@ def evaluate_episode(env, agent, episode_num, reset_options=None):
         )
 
         if episode_length % 100 == 0:
-            ee_pos, ee_orn = env.sim.robot.link_pose()
+            ee_pos, ee_orn = env._ee_pose_w()
             pos_error = np.linalg.norm(ee_pos - env.goal_pos)
             orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
             print(
@@ -324,7 +337,7 @@ def evaluate_episode(env, agent, episode_num, reset_options=None):
             )
 
     elapsed_time = time.time() - start_time
-    ee_pos, ee_orn = env.sim.robot.link_pose()
+    ee_pos, ee_orn = env._ee_pose_w()
     pos_error = np.linalg.norm(ee_pos - env.goal_pos)
     orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
     success = (

@@ -12,7 +12,7 @@ STICKS_ACTIVE_PARAM = "/teleop_sticks_active"
 # Set True by direct_teleop_ros so low_level disables P tracking (shared YAML kp).
 FORCE_ZERO_LL_KP_PARAM = "/mm_run/force_zero_ll_kp"
 
-VALID_TELEOP_MODES = ("none", "mpsf", "direct")
+VALID_TELEOP_MODES = ("none", "mpsf", "direct", "rl")
 TELEOP_MODE_PARAM = "/mm_run/teleop_mode"
 
 TELEOP_DEFAULTS = {

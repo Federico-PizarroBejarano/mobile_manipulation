@@ -108,9 +108,10 @@ class SimpleGoalEnv(BaseRLEnv):
         Returns:
             float: Reward value
         """
-        # Get current end-effector pose (achieved after IK)
-        ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
-        base_pos_w, base_orn_w = self.sim.robot.link_pose(link_idx=-1)
+        # Get current end-effector pose (Casadi FK, achieved after IK)
+        q, _ = self.sim.robot.joint_states()
+        ee_pos_w, ee_orn_w = self._ee_pose_w(q)
+        base_pos_w, base_orn_w = self._base_pose_w(q)
 
         # Transform to base frame for reward computation
         ee_pos_b, ee_orn_b = self._world_to_base_frame(
@@ -157,7 +158,8 @@ class SimpleGoalEnv(BaseRLEnv):
             return True
 
         # Then check if goal is reached
-        ee_pos_w, ee_orn_w = self.sim.robot.link_pose()
+        q, _ = self.sim.robot.joint_states()
+        ee_pos_w, ee_orn_w = self._ee_pose_w(q)
 
         # Check position distance
         pos_error = np.linalg.norm(ee_pos_w - self.goal_pos)

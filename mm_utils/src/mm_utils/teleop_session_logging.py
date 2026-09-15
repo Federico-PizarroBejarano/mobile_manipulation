@@ -162,6 +162,8 @@ def mode_to_int(mode):
         return 0
     if mode == "ee":
         return 1
+    if mode == "rl":
+        return 2
     return -1
 
 

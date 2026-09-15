@@ -27,14 +27,20 @@ goal:
   orn_range: 3.14  # Goal orientation range in radians
   success_pos_threshold: 0.1  # Position success threshold in meters
   success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
+  obs_horizon_m: 1.5  # Cap obs g look-ahead along planner path (MoMa-style subgoal)
+
+# Episode start: home + light base randomization (arm joints stay at home)
+reset:
+  base_xy_noise: 0.2  # m, uniform in [-noise, noise] for base x and y
+  randomize_yaw: true  # full yaw Uniform[0, 2π)
 
 # Reward parameters (IK: modulation_rl-style normalized L2, -0.5 when at pos_scale/rot_scale)
 reward:
   ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik)
   pos_scale: 0.1   # Position normalization (m), same as modulation_rl ikslack_dist
   rot_scale: 0.05  # Rotation normalization, same as modulation_rl ikslack_rot_dist
-  acceleration_penalty_multiplier: 0.05
-  base_action_penalty_multiplier: 0.05
+  acceleration_penalty_multiplier: 0.1
+  base_action_penalty_multiplier: 0.1
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -59,18 +65,18 @@ termination:
   slack_rot_threshold: 0.05  # Step counts as failure if rot deviation > this
   ik_fail_thresh: 20         # Terminate when total failure steps >= this
 
-# IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
+# IK solver parameters (match direct teleop)
 ik:
-  regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
+  regularization_strength: 0.1  # Regularization strength (λ) for minimum displacement goal
   use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
 
-# Planner parameters
+# Planner parameters (align with teleop EE linear speed)
 planner:
-  max_linear_speed: 0.08  # m/s; caps mean linear speed along the position segment of the path
+  max_linear_speed: 0.12  # m/s; caps mean linear speed along the position segment of the path
 
-# Robot speed override (~modulation_rl: base_vel_rng 0.2 m/s, base_rot_rng 0.75 rad/s)
+# Robot speed override (match hardware teleop / MPSF goal_velocity caps)
 robot:
-  base_linear_vel_limit: 0.4   # m/s
-  base_angular_vel_limit: 0.75  # rad/s
-  ee_linear_vel_limit: 0.5     # m/s clamp before IK
-  ee_angular_vel_limit: 0.75   # rad/s clamp before IK
+  base_linear_vel_limit: 0.3   # m/s
+  base_angular_vel_limit: 0.3  # rad/s
+  ee_linear_vel_limit: 0.12    # m/s clamp before IK
+  ee_angular_vel_limit: 0.25   # rad/s clamp before IK

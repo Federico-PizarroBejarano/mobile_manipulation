@@ -65,9 +65,22 @@ def test_plateau_at_goal():
     np.testing.assert_allclose(dp, p._goal_pos, atol=1e-5)
 
 
+def test_pose_at_horizon_caps_distance():
+    start = np.array([0.0, 0.0, 0.8])
+    goal = np.array([3.0, 0.0, 0.8])
+    orn = np.array([0.0, 0.0, 0.0, 1.0])
+    p = EEPlanner(goal, orn, start, orn, max_linear_speed=0.12, dt=0.03)
+    gp, _ = p.pose_at_horizon(1.5)
+    np.testing.assert_allclose(gp, np.array([1.5, 0.0, 0.8]), atol=1e-6)
+    p.s = 0.5
+    gp2, _ = p.pose_at_horizon(1.5)
+    np.testing.assert_allclose(gp2, goal, atol=1e-6)
+
+
 if __name__ == "__main__":
     test_slerp_endpoints()
     test_pure_orientation_min_steps()
     test_translation_respects_max_linear_speed()
     test_plateau_at_goal()
+    test_pose_at_horizon_caps_distance()
     print("all ok")

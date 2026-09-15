@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 import mm_control.MPC as MPC
+from mm_control.robot import MobileManipulator3D
 from mm_rl.env.ee_planner import EEPlanner
 from mm_rl.mpsf_helpers import (
     build_ik_params_from_config,
@@ -133,8 +134,13 @@ def test_ee_planner_with_mpsf(
     ctrl_period = 1.0 / ctrl_config.get("ctrl_rate", 10.0)
 
     ik_params = None
+    robot_mdl = None
     if use_ik_solver:
         ik_params = build_ik_params_from_config(config, nu, nq)
+        ctrl_for_mdl = dict(ctrl_config)
+        if "dt" not in ctrl_for_mdl:
+            ctrl_for_mdl["dt"] = float(sim_config["timestep"])
+        robot_mdl = MobileManipulator3D(ctrl_for_mdl)
 
     # --- Episode parameters (from config) ---
     goal_cfg = config.get("goal", {})
@@ -260,7 +266,10 @@ def test_ee_planner_with_mpsf(
             # Compute velocity command: IK path vs MPC interpolation
             if use_ik_solver:
                 mpc_base_vel = np.zeros(3) if v_bar is None else v_bar[1, :3]
-                u = solve_ik(robot, desired_ee_vel_world, mpc_base_vel, ik_params)
+                q_ik, _ = robot.joint_states()
+                u = solve_ik(
+                    robot_mdl, q_ik, desired_ee_vel_world, mpc_base_vel, ik_params
+                )
             else:
                 u = v_bar[1, :]
 

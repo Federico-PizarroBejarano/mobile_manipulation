@@ -18,6 +18,7 @@
   <depend>mm_control</depend>
   <depend>mm_plan</depend>
   <depend>mm_utils</depend>
+  <depend>mm_rl</depend>
   <exec_depend>robotiq_3f_gripper_articulated_msgs</exec_depend>
 
   <export>

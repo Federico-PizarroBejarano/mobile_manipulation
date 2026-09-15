@@ -11,6 +11,7 @@
   <depend>std_msgs</depend>
   <depend>mm_simulator</depend>
   <depend>mm_utils</depend>
+  <depend>mm_control</depend>
   <buildtool_depend>catkin</buildtool_depend>
 
   <export>

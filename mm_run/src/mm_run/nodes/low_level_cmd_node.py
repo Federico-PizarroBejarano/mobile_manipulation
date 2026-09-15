@@ -87,14 +87,15 @@ class LowLevelCmdNode:
         self.kp = np.asarray(ll.get("kp", []), dtype=float).reshape(-1)
         # Direct teleop freezes q_bar at measurement; P tracking fights stick vel.
         # Prefer teleop_mode (set at launch) over the ROS param — nodes race at start.
-        force_zero_kp = self.teleop_mode == "direct" or bool(
+        force_zero_kp = self.teleop_mode in ("direct", "rl") or bool(
             rospy.get_param(FORCE_ZERO_LL_KP_PARAM, False)
         )
         if force_zero_kp:
             self.kp_arg = None
             rospy.loginfo(
-                "low_level_cmd_node: kp disabled for direct teleop "
-                "(plan is velocity-only; shared YAML kp left unchanged)"
+                "low_level_cmd_node: kp disabled for %s teleop "
+                "(plan is velocity-only; shared YAML kp left unchanged)",
+                self.teleop_mode,
             )
         else:
             self.kp_arg = (
@@ -343,10 +344,19 @@ class LowLevelCmdNode:
                 wait_hint = (
                     "\n  (no MpcPlan yet: plan node not started — "
                     "check controller_mpc / controller_mpsf / "
-                    "controller_direct_teleop; Square is ignored until "
+                    "controller_direct_teleop / controller_rl_teleop; "
+                    "Square is ignored until "
                     "joint states arrive)"
                 )
-        elif self._plan_count == 0 and ctrl_started and self.teleop_mode != "direct":
+        elif (
+            self._plan_count == 0
+            and ctrl_started
+            and self.teleop_mode
+            not in (
+                "direct",
+                "rl",
+            )
+        ):
             wait_hint = (
                 "\n  (plan node started but no MpcPlan yet — "
                 "check that node for errors)"

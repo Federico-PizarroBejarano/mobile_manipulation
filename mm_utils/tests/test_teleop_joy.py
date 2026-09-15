@@ -153,4 +153,4 @@ class TestParseTeleopConfig:
 
     def test_teleop_mode_constants(self):
         assert TELEOP_MODE_PARAM == "/mm_run/teleop_mode"
-        assert VALID_TELEOP_MODES == ("none", "mpsf", "direct")
+        assert VALID_TELEOP_MODES == ("none", "mpsf", "direct", "rl")

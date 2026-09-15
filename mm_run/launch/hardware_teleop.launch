@@ -2,14 +2,14 @@
 <!-- Hardware teleop: plan node + low_level on the real robot.
      Requires thing.launch (robot + joy_stick_relay) already running unless launch_robot:=true.
      Joy defaults off: lab bringup already publishes /bluetooth_teleop/joy.
-     teleop:=mpsf (default) or teleop:=direct. -->
+     teleop:=mpsf (default), direct, or rl. -->
 
 <launch>
   <arg name="config" default="$(find mm_run)/config/mpsf_experiments/joystick_teleop_with_obstacles.yaml" doc="Experiment config YAML"/>
   <arg name="ctrl_config" default="default"/>
   <arg name="planner_config" default="default"/>
   <arg name="logging_sub_folder" default="default"/>
-  <arg name="teleop" default="mpsf" doc="mpsf or direct"/>
+  <arg name="teleop" default="mpsf" doc="mpsf, direct, or rl"/>
   <arg name="controller_type" default="ps4" doc="ps4 or xbox (only used if joystick:=true)"/>
   <arg name="joy_dev" default="$(optenv RIDGEBACK_JOY_DEVICE /dev/input/js0)"/>
   <arg name="joystick" default="false" doc="start mm_run joy_node; leave false if /bluetooth_teleop/joy already exists"/>

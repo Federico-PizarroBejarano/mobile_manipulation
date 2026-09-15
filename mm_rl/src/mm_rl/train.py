@@ -70,7 +70,7 @@ def evaluate(env, agent, n_episodes=5):
             done = terminated or truncated
 
         # Check if goal was actually reached (not just early termination)
-        ee_pos, ee_orn = env.sim.robot.link_pose()
+        ee_pos, ee_orn = env._ee_pose_w()
         pos_error = np.linalg.norm(ee_pos - env.goal_pos)
         orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
         success = (

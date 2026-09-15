@@ -173,3 +173,26 @@ class EEPlanner:
             tuple: (desired_pos, desired_orn) in world frame
         """
         return self.desired_pos.copy(), self.desired_orn.copy()
+
+    def path_pose(self, s):
+        """Public wrapper for pose at path parameter ``s`` ∈ [0, 1]."""
+        return self._path_pose(s)
+
+    def pose_at_horizon(self, horizon_m):
+        """Pose at most ``horizon_m`` meters ahead along the path from current ``s``.
+
+        For the open-loop straight-line path, arc length from start is
+        ``s * ||goal - start||``. Advances by ``min(horizon_m, remaining)``.
+
+        Args:
+            horizon_m (float): Maximum look-ahead distance in meters.
+
+        Returns:
+            tuple: ``(pos, orn)`` in world frame.
+        """
+        dist = float(np.linalg.norm(self._goal_pos - self._start_pos))
+        if dist < 1e-12:
+            return self._goal_pos.copy(), self._goal_orn.copy()
+        ds = float(horizon_m) / dist
+        s_g = min(1.0, float(self.s) + ds)
+        return self._path_pose(s_g)
