@@ -70,7 +70,7 @@ controller:
 
   mpsf_params:
     objective_horizon: 10
-    decay_rate: 1.0
+    decay_rate: 0.85
     # Was 0.45: teleop BaseVel weights became too weak vs upright nullspace spin.
     mpsf_weight_multiplier: 1.0
     mpsf_base_mask: [true, true, true]

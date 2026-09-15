@@ -10,7 +10,7 @@ controller:
   # MPSF parameters - arm must avoid obstacles while base follows teleop
   mpsf_params:
     objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1)
-    decay_rate: 1.0         # Decay factor per time step (0 to 1)
+    decay_rate: 0.85         # Decay factor per time step (0 to 1)
     mpsf_base_mask: [true, true, true]  # Base follows planner
     mpsf_ee_mask: [false, false, false, false, false, false]  # MPSF controls EE to avoid obstacles
     mpsf_weight_multiplier: 1.0

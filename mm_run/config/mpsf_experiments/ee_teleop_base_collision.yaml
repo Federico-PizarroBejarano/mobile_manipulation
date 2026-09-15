@@ -8,7 +8,7 @@ controller:
 
   mpsf_params:
     objective_horizon: 10   # Number of steps with non-zero weights (1 to N+1)
-    decay_rate: 1.0         # Decay factor per time step (0 to 1)
+    decay_rate: 0.85         # Decay factor per time step (0 to 1)
     mpsf_base_mask: [false, false, false]  # MPSF controls base to avoid obstacles
     mpsf_ee_mask: [true, true, true, false, false, false]  # EE follows planner
     mpsf_ee_goal: [-0.5, -1.5, 0.7, 0, 0, 0]  # [x, y, z, roll, pitch, yaw]
