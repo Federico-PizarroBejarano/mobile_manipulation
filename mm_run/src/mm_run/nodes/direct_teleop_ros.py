@@ -40,6 +40,8 @@ from mm_utils.teleop_joy import (
     STICKS_ACTIVE_PARAM,
     axes_to_base_velocity,
     axes_to_ee_velocity,
+    chassis_base_twist_to_world,
+    chassis_ee_twist_to_world,
     joint_velocity_command,
     parse_teleop_config,
     store_joy_axes,
@@ -324,8 +326,12 @@ class DirectTeleopROSNode:
                 buttons,
             )
 
+        q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
+        yaw = float(q[2])
         if mode == "base":
-            desired_base_vel = axes_to_base_velocity(axes, self.teleop_max_base_vel)
+            desired_base_vel = chassis_base_twist_to_world(
+                axes_to_base_velocity(axes, self.teleop_max_base_vel), yaw
+            )
             v_cmd = joint_velocity_command(
                 mode, desired_base_vel, desired_ee_vel, self.nu
             )
@@ -339,10 +345,12 @@ class DirectTeleopROSNode:
                 buttons,
             )
 
-        desired_ee_vel = axes_to_ee_velocity(
-            axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
+        desired_ee_vel = chassis_ee_twist_to_world(
+            axes_to_ee_velocity(
+                axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
+            ),
+            yaw,
         )
-        q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
         J = spatial_jacobian(self.robot_mdl, q)
         v_cmd = solve_diff_ik(
             J,

@@ -59,6 +59,16 @@ controller:
     max_disagreement: 0.25
     stale_s: 0.2
 
+  # When base/EE velocity command and matching measured vel are both near zero,
+  # zero that measured block fed into MPC so estimator noise cannot coast into
+  # cmd_vel. Does not freeze the robot: constraints/costs can still accelerate
+  # from rest. Arm gate uses joint rates v[3:9] when EE is not commanded.
+  base_velocity_idle_gate:
+    enabled: false
+    cmd_eps: 0.001   # L2 threshold on commanded base twist / EE twist
+    meas_eps: 0.02   # L2 threshold on measured base twist
+    arm_meas_eps: 0.05  # L2 threshold on measured arm joint rates [rad/s]
+
   # Payload balancing (aligned acceleration constraint, MPC-only); link/up/g fixed in code
   upright:
     enabled: False
@@ -97,8 +107,8 @@ controller:
     # Same activation rule as EEVel (WaypointPlanner without end_stop → inactive).
     # Set vyaw weight (3rd element) to 0 to disable yaw velocity tracking
     BaseVel:
-      Qk: [0.3, 0.3, 0.3]  # [vx, vy, vyaw] - set vyaw weight to 0 to disable yaw velocity tracking
-      P: [0.3, 0.3, 0.3]    # Terminal weights [vx, vy, vyaw]
+      Qk: [1.0, 1.0, 1.0]  # [vx, vy, vyaw] - set vyaw weight to 0 to disable yaw velocity tracking
+      P: [1.0, 1.0, 1.0]    # Terminal weights [vx, vy, vyaw]
     # Control effort cost (always included)
     ControlEffort:
       Qqa: [0, 0, 0, 0, 0, 0]
@@ -140,7 +150,7 @@ controller:
       hessian_approx: "GAUSS_NEWTON"
       integrator_type: "ERK"
       print_level: 0
-      nlp_solver_type: "SQP"  #SQP_RTI, SQP
+      nlp_solver_type: "SQP_RTI"  #SQP_RTI, SQP
       globalization: "MERIT_BACKTRACKING"
       qp_solver_iter_max: 40
       nlp_solver_tol_comp: 1.e-06

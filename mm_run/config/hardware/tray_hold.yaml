@@ -38,7 +38,7 @@ simulation:
 
 include:
   - package: "mm_run"
-    path: "config/robot/thing.yaml"
+    path: "config/robot/thing_tray.yaml"
   - package: "mm_run"
     path: "config/controller/MPC.yaml"
   - package: "mm_run"

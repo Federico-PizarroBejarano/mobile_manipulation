@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <robot name="end_effector_tray_gripped" xmlns:xacro="http://wiki.ros.org/xacro">
+  <!-- Square tray 11.5" side, 3" thick. Visual is a flat cylinder; MPC collision
+       is a conservative circumscribed sphere (avoids cylinder–cylinder SD).
+       TCP at gripped_object (~fingertips).
+       use_collision comes from robot urdf args (declared in collision.urdf.xacro). -->
+  <xacro:property name="tray_disk_radius" value="0.2065"/>
+  <xacro:property name="tray_height" value="0.076"/>
+  <!-- sqrt(R^2 + (H/2)^2) for R=0.2065, H=0.076 -->
+  <xacro:property name="tray_collision_radius" value="0.210"/>
+
   <joint name="gripped_object_joint" type="fixed">
     <xacro:transformed_origin name="gripped_object_transform" />
     <parent link="gripper"/>
@@ -8,26 +17,42 @@
 
   <link name="gripped_object">
     <visual>
-      <origin rpy="0 0 0" xyz="0 0 -0.01"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <cylinder length="0.02" radius="0.16"/>
+        <cylinder length="${tray_height}" radius="${tray_disk_radius}"/>
       </geometry>
       <material name="tray_black">
         <color rgba="0.05 0.05 0.05 1"/>
       </material>
     </visual>
-
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 -0.01"/>
-      <geometry>
-        <cylinder length="0.02" radius="0.16"/>
-      </geometry>
-    </collision>
-
     <inertial>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <mass value="0.1"/>
       <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
     </inertial>
   </link>
+
+  <!-- Separate named link for MPC collision_link_names.tool -->
+  <link name="tray_collision_link">
+    <xacro:if value="$(arg use_collision)">
+      <collision>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+          <sphere radius="${tray_collision_radius}"/>
+        </geometry>
+      </collision>
+    </xacro:if>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <sphere radius="${tray_collision_radius}"/>
+      </geometry>
+      <material name="seethrough"/>
+    </visual>
+  </link>
+  <joint name="tray_collision_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <parent link="gripped_object"/>
+    <child link="tray_collision_link"/>
+  </joint>
 </robot>

@@ -8,6 +8,8 @@ from mm_utils.teleop_joy import (
     VALID_TELEOP_MODES,
     axes_to_base_velocity,
     axes_to_ee_velocity,
+    chassis_base_twist_to_world,
+    chassis_ee_twist_to_world,
     ee_yaw_from_buttons,
     gate_teleop_velocity,
     joint_velocity_command,
@@ -28,11 +30,11 @@ class TestEeYawFromButtons:
 
     def test_dpad_indices_hardware(self):
         buttons = [0] * 16
-        buttons[14] = 1
-        assert ee_yaw_from_buttons(buttons, 14, 15) == -1.0
-        buttons[14] = 0
-        buttons[15] = 1
-        assert ee_yaw_from_buttons(buttons, 14, 15) == 1.0
+        buttons[12] = 1
+        assert ee_yaw_from_buttons(buttons, 12, 11) == -1.0
+        buttons[12] = 0
+        buttons[11] = 1
+        assert ee_yaw_from_buttons(buttons, 12, 11) == 1.0
 
     def test_both_pressed_cancels(self):
         buttons = [0] * 6
@@ -95,13 +97,37 @@ class TestAxesToBaseVelocity:
         np.testing.assert_allclose(out, [0.3, 0.2, -0.1])
 
 
+class TestChassisBaseTwistToWorld:
+    def test_yaw_zero_passthrough(self):
+        v = np.array([0.3, -0.1, 0.2])
+        np.testing.assert_allclose(chassis_base_twist_to_world(v, 0.0), v)
+
+    def test_yaw_pi_over_two_forward_becomes_plus_y(self):
+        # Chassis +x (forward) -> world +y when yaw = pi/2
+        v = np.array([1.0, 0.0, 0.15])
+        out = chassis_base_twist_to_world(v, np.pi / 2)
+        np.testing.assert_allclose(out, [0.0, 1.0, 0.15], atol=1e-12)
+
+
+class TestChassisEeTwistToWorld:
+    def test_yaw_zero_passthrough(self):
+        tw = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6])
+        np.testing.assert_allclose(chassis_ee_twist_to_world(tw, 0.0), tw)
+
+    def test_yaw_pi_over_two_rotates_lin_and_ang(self):
+        # Chassis +x lin / +x ang -> world +y; vz and wz unchanged
+        tw = np.array([1.0, 0.0, 0.3, 0.5, 0.0, 0.25])
+        out = chassis_ee_twist_to_world(tw, np.pi / 2)
+        np.testing.assert_allclose(out, [0.0, 1.0, 0.3, 0.0, 0.5, 0.25], atol=1e-12)
+
+
 class TestAxesToEeVelocity:
     def test_full_deflection_with_yaw_button(self):
         axes = np.array([0.5, 1.0, -0.5, 0.5, 0.0, 1.0])  # wy = rt - lt = 1
         buttons = [0] * 16
-        buttons[15] = 1  # right yaw
+        buttons[11] = 1  # right yaw (d-pad right)
         max_vel = np.array([0.12, 0.12, 0.12, 0.25, 0.25, 0.25])
-        out = axes_to_ee_velocity(axes, buttons, max_vel, [14, 15])
+        out = axes_to_ee_velocity(axes, buttons, max_vel, [12, 11])
         np.testing.assert_allclose(out, [0.12, 0.06, 0.06, -0.125, 0.25, 0.25])
 
 
@@ -127,7 +153,7 @@ class TestParseTeleopConfig:
         assert cfg["enabled"] is False
         assert cfg["enable_button"] == HARDWARE_DEADMAN_BUTTON
         np.testing.assert_array_equal(cfg["max_base_vel"], [0.3, 0.3, 0.3])
-        assert cfg["ee_yaw_buttons"] == [14, 15]
+        assert cfg["ee_yaw_buttons"] == [12, 11]
 
     def test_controller_teleop_section(self):
         cfg = parse_teleop_config(

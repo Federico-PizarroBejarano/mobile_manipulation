@@ -8,6 +8,13 @@ This directory contains configuration files for different joystick controllers.
 
 Button indices are the same for sim and hardware; see comments in each YAML file.
 
+## Robot / tool collision
+
+- Gripper-only: experiment includes `config/robot/thing.yaml` (shaft + palm).
+- Tray: include `config/robot/thing_tray.yaml` instead (shaft + palm + tray spheres).
+
+See `mm_run/config/configuration.md` (tool collision modes).
+
 ## Installation
 Before using the joystick teleop, you need to install the required ROS packages:
 
@@ -94,6 +101,8 @@ Press buttons and note which button number corresponds to which physical button.
 
 ## Joystick Teleop (sim and real robot)
 
+Stick commands are **chassis-relative**: stick forward means robot-forward, strafe left means robot-left (same for EE linear/angular). Nodes rotate those twists into the world frame using the current base yaw before MPC, diff-IK, or RL EE integration.
+
 All joystick consumers use **`/bluetooth_teleop/joy`** (deadman relay, Square/Triangle, sticks). Only one process can open `/dev/input/js0` at a time.
 
 - **Real robot:** use the existing lab / Clearpath joy publisher (already `/bluetooth_teleop/joy`).
@@ -167,7 +176,8 @@ roslaunch mm_run run_pybullet_sim.launch teleop:=rl gui:=True \
 | Triangle / Y | 3 | 3 | Toggle gripper open / close (normal mode) |
 | Cross / A | 0 | 0 | Toggle base ↔ EE teleop mode (`mpsf`/`direct` only; unused in `rl`) |
 | Square / X | 2 | 2 | Start / stop experiment |
-| D-pad L / R | 14 / 15 | 14 / 15 | EE yaw |
+| D-pad L / R | 12 / 11 | 12 / 11 | EE yaw |
+| D-pad down | 14 | 14 | Unused |
 
 ### Verify d-pad indices
 
@@ -175,7 +185,7 @@ Before first hardware run, confirm d-pad left/right button numbers (joy already 
 ```bash
 rosrun mm_run test_joystick.py ps4
 ```
-Or in sim / without lab joy: `roslaunch mm_run teleop.launch controller_type:=ps4` first. Press d-pad left and right; update `controller.teleop.ee_yaw_buttons` in the experiment YAML if indices differ from 14/15.
+Or in sim / without lab joy: `roslaunch mm_run teleop.launch controller_type:=ps4` first. Press d-pad left and right; update `controller.teleop.ee_yaw_buttons` in the experiment YAML if indices differ from `[12, 11]` (left, right).
 
 ### During an experiment
 

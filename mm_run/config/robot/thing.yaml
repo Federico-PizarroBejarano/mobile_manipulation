@@ -113,7 +113,8 @@ controller:
         - "ur10_arm_wrist1_collision_link"
         - "ur10_arm_wrist3_collision_link"
       tool:
-        - "gripped_object_collision_link"
+        - "gripper_shaft_collision_link"
+        - "gripper_palm_collision_link"
 
 
     urdf:
@@ -121,7 +122,7 @@ controller:
       path: "thing/urdf/thing_ctrl.urdf"
       includes:
         - "$(find mobile_manipulation_central)/urdf/xacro/thing_no_wheels.urdf.xacro"
-        - "$(find mm_assets)/thing/xacro/end_effector_fingers.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/end_effector_empty.urdf.xacro"
         - "$(find mm_assets)/thing/xacro/collision.urdf.xacro"
       args:
         use_collision: "True"

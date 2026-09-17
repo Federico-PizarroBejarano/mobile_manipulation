@@ -30,8 +30,10 @@ def test_joystick(controller_type="xbox"):
         print("  Button 3: Triangle (toggle gripper open/close)")
         print("  Button 4: L1 (Clearpath teleop — not during MPSF)")
         print("  Button 5: R1 (Clearpath teleop — not during MPSF)")
+        print("  Button 11: D-pad right (EE yaw +)")
+        print("  Button 12: D-pad left (EE yaw -)")
         print("  Button 13: D-pad up (hardware deadman + MPSF stick enable)")
-        print("  Button 14/15: D-pad L/R (EE yaw on hardware — verify)")
+        print("  Button 14: D-pad down (unused)")
     else:  # xbox
         print("XBOX Button mappings:")
         print("  Button 0: A (toggle base/EE mode)")
@@ -40,8 +42,10 @@ def test_joystick(controller_type="xbox"):
         print("  Button 3: Y (toggle gripper open/close)")
         print("  Button 4: LB (Clearpath teleop — not during MPSF)")
         print("  Button 5: RB (Clearpath teleop — not during MPSF)")
+        print("  Button 11: D-pad right (EE yaw +)")
+        print("  Button 12: D-pad left (EE yaw -)")
         print("  Button 13: D-pad up (hardware deadman + MPSF stick enable)")
-        print("  Button 14/15: D-pad L/R (EE yaw on hardware — verify)")
+        print("  Button 14: D-pad down (unused)")
 
     print("\nWaiting for joystick messages...")
     print("Press buttons or move sticks to see values\n")

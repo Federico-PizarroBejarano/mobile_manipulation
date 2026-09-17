@@ -312,6 +312,17 @@ controller:
       args: {key: value}
 ```
 
+**Tool collision modes (YAML switch):**
+
+| Include | Tool MPC bodies |
+|---------|-----------------|
+| `config/robot/thing.yaml` | Gripper shaft + palm spheres (no fingers) |
+| `config/robot/thing_tray.yaml` | Same + conservative tray sphere on `gripped_object` |
+
+Tray experiments include `thing_tray.yaml` instead of `thing.yaml`. EE TCP stays `gripped_object` (~0.29 m from flange) in both modes.
+
+Include the robot YAML from the experiment file (not from `config/sim/simulation.yaml`). Nested robot includes are overwritten by later includes in `load_config`.
+
 
 ## Simulation
 
@@ -442,7 +453,7 @@ controller:
   teleop:
     enabled: true
     enable_button: 13         # d-pad up — hardware deadman and stick enable
-    ee_yaw_buttons: [14, 15]  # d-pad L/R for EE yaw
+    ee_yaw_buttons: [12, 11]  # d-pad left, right for EE yaw
     max_base_vel: [0.3, 0.3, 0.3]
     max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
 

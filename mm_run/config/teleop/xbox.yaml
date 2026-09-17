@@ -8,9 +8,10 @@
 #   Button 4:  LB — Clearpath teleop (do not hold during MPSF)
 #   Button 5:  RB — Clearpath teleop (do not hold during MPSF)
 #   Button 9:  Menu — unused by MPSF teleop
+#   Button 11: D-pad right — EE yaw positive
+#   Button 12: D-pad left — EE yaw negative
 #   Button 13: D-pad up — hardware deadman and MPSF stick enable
-#   Button 14: D-pad left — EE yaw negative (verify with test_joystick.py)
-#   Button 15: D-pad right — EE yaw positive (verify with test_joystick.py)
+#   Button 14: D-pad down — unused by MPSF teleop
 #
 # Axis mappings:
 #   Axis 0: Left stick X (vy)

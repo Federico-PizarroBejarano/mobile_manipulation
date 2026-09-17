@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from mm_utils.base_velocity_guard import body_twist_to_world
+
 # D-pad up. Same index as the hardware relay deadman in
 # mobile_manipulation_central/joy_stick_relay.py (enable_button).
 HARDWARE_DEADMAN_BUTTON = 13
@@ -18,7 +20,7 @@ TELEOP_MODE_PARAM = "/mm_run/teleop_mode"
 TELEOP_DEFAULTS = {
     "enabled": False,
     "enable_button": HARDWARE_DEADMAN_BUTTON,
-    "ee_yaw_buttons": [14, 15],
+    "ee_yaw_buttons": [12, 11],  # d-pad left, right
     "max_base_vel": [0.3, 0.3, 0.3],
     "max_ee_vel": [0.12, 0.12, 0.12, 0.25, 0.25, 0.25],
 }
@@ -29,6 +31,29 @@ GOAL_VELOCITY_DEFAULTS = {
     "base_threshold": [0.3, 0.3, 0.3],
     "ee_threshold": [0.2, 0.2, 0.2, 0.3, 0.3, 0.3],
 }
+
+
+def _planar_yaw_rotation(yaw):
+    """3x3 rotation that maps chassis-frame vectors into the world frame."""
+    c = np.cos(yaw)
+    s = np.sin(yaw)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=float)
+
+
+def chassis_base_twist_to_world(v_chassis, yaw):
+    """Map chassis-frame base twist ``[vx, vy, vyaw]`` to world frame."""
+    return body_twist_to_world(v_chassis, float(yaw))
+
+
+def chassis_ee_twist_to_world(twist_chassis, yaw):
+    """Map chassis-frame EE twist ``[vx, vy, vz, wx, wy, wz]`` to world frame.
+
+    Linear and angular 3-vectors are rotated by planar yaw; ``vz`` and ``wz``
+    are unchanged.
+    """
+    tw = np.asarray(twist_chassis, dtype=float).reshape(6)
+    rot = _planar_yaw_rotation(float(yaw))
+    return np.concatenate([rot @ tw[:3], rot @ tw[3:]])
 
 
 def ee_yaw_from_buttons(buttons, left_idx, right_idx):
@@ -57,7 +82,11 @@ def teleop_enable_held(buttons, enable_button_index):
 
 
 def axes_to_base_velocity(joy_axes, max_base_vel):
-    """Map stored joy axes [lx, ly, rx, ry, lt, rt] to base [vx, vy, vyaw]."""
+    """Map joy axes to chassis-frame base twist ``[vx, vy, vyaw]``.
+
+    Callers must convert with :func:`chassis_base_twist_to_world` before feeding
+    world-frame MPC / cmd_vel consumers.
+    """
     joy_axes = np.asarray(joy_axes, dtype=float).reshape(-1)
     max_base_vel = np.asarray(max_base_vel, dtype=float).reshape(3)
     return np.array(
@@ -71,7 +100,11 @@ def axes_to_base_velocity(joy_axes, max_base_vel):
 
 
 def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel, ee_yaw_buttons):
-    """Map joy axes + yaw buttons to EE twist [vx, vy, vz, wx, wy, wz]."""
+    """Map joy axes + yaw buttons to chassis-frame EE twist.
+
+    Returns ``[vx, vy, vz, wx, wy, wz]`` in the chassis frame. Callers must
+    convert with :func:`chassis_ee_twist_to_world` before world-frame consumers.
+    """
     joy_axes = np.asarray(joy_axes, dtype=float).reshape(-1)
     max_ee_vel = np.asarray(max_ee_vel, dtype=float).reshape(6)
     left_idx, right_idx = ee_yaw_buttons
@@ -91,10 +124,11 @@ def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel, ee_yaw_buttons):
 
 
 def joint_velocity_command(mode, base_vel, ee_vel, nu):
-    """Map teleop twists to length-``nu`` joint cmd_vel (world frame).
+    """Map teleop twists to length-``nu`` joint cmd_vel (world-frame base).
 
-    Base mode copies base twist into ``[:3]``. EE mode returns zeros here;
-    callers that support differential IK should solve arm rates separately.
+    ``base_vel`` must already be in the world frame. Base mode copies it into
+    ``[:3]``. EE mode returns zeros here; callers that support differential IK
+    should solve arm rates separately.
     """
     cmd = np.zeros(int(nu), dtype=float)
     if mode == "base":

@@ -33,7 +33,3 @@ simulation:
     spawn_offset: [0.0, 0.0, 0.12]
     fell_rel_z_tool_threshold: -0.03
     color: [0.9, 0.2, 0.2, 1.0]
-
-include:
-  - package: "mm_run"
-    path: "config/robot/thing.yaml"

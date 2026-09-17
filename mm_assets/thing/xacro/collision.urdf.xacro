@@ -26,20 +26,20 @@
     </link>
   </xacro:macro>
 
-    <xacro:macro name="collision_link_cylinder" params="name radius">
+    <xacro:macro name="collision_link_cylinder" params="name radius length">
     <link name="${name}">
       <xacro:if value="$(arg use_collision)">
         <collision>
           <origin rpy="0 0 0" xyz="0 0 0" />
           <geometry>
-            <cylinder  radius="${radius}" length="1"/>
+            <cylinder radius="${radius}" length="${length}"/>
           </geometry>
         </collision>
       </xacro:if>
       <visual>
         <origin rpy="0 0 0" xyz="0 0 0" />
         <geometry>
-          <cylinder  radius="${radius}" length="1"/>
+          <cylinder radius="${radius}" length="${length}"/>
         </geometry>
         <material name="${material}"/>
       </visual>
@@ -68,7 +68,7 @@
     <child link="base_collision_link_back"/>
   </joint> -->
 
-  <xacro:collision_link_cylinder name="rack_collision_link" radius="0.325"/>
+  <xacro:collision_link_cylinder name="rack_collision_link" radius="0.325" length="1"/>
   <joint name="rack_collision_joint" type="fixed">
     <origin rpy="0 0 0" xyz="-0.45 -0. 0.75"/>
     <parent link="base_link"/>
@@ -155,13 +155,21 @@
     <child link="ur10_arm_wrist3_collision_link"/>
   </joint>
 
-  <!-- Gripped Object -->
-  <xacro:collision_link_sphere name="gripped_object_collision_link" radius="0.15"/>
-  <joint name="gripped_object_collision_joint" type="fixed">
-    <origin rpy="0 0 0" xyz="0 0 0.0"/>
-    <parent link="gripped_object"/>
-    <child link="gripped_object_collision_link"/>
+  <!-- Robotiq gripper: 3" shaft + 3.5"-diameter palm as spheres (fingers unmodeled).
+       Shaft sphere circumscribes the old cylinder (r=0.045, L=0.076) at z=0.038.
+       Palm center at z=0.121. Spheres keep MPC on sphere–sphere / sphere–cylinder. -->
+  <xacro:collision_link_sphere name="gripper_shaft_collision_link" radius="0.059"/>
+  <joint name="gripper_shaft_collision_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.038"/>
+    <parent link="gripper"/>
+    <child link="gripper_shaft_collision_link"/>
   </joint>
 
+  <xacro:collision_link_sphere name="gripper_palm_collision_link" radius="0.0445"/>
+  <joint name="gripper_palm_collision_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.121"/>
+    <parent link="gripper"/>
+    <child link="gripper_palm_collision_link"/>
+  </joint>
 
 </robot>

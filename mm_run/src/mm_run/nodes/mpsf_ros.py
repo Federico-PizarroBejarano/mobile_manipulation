@@ -14,6 +14,8 @@ from mm_utils.teleop_joy import (
     STICKS_ACTIVE_PARAM,
     axes_to_base_velocity,
     axes_to_ee_velocity,
+    chassis_base_twist_to_world,
+    chassis_ee_twist_to_world,
     gate_teleop_velocity,
     parse_teleop_config,
     store_joy_axes,
@@ -43,7 +45,7 @@ class MPSFControllerROSNode(ControllerROSNode):
         self.teleop_control_mode = "base"
         self._last_toggle_button_state = False
         self.teleop_enable_button = None
-        self.teleop_ee_yaw_buttons = [14, 15]
+        self.teleop_ee_yaw_buttons = [12, 11]
         self._teleop_enable_active = False
         self._sticks_active_param = True
 
@@ -211,16 +213,22 @@ class MPSFControllerROSNode(ControllerROSNode):
                 self._current_desired_base_vel = desired_velocity["base_velocity"]
                 self._current_desired_ee_vel = desired_velocity["ee_velocity"]
             else:
+                q = np.asarray(robot_states[0], dtype=float).reshape(-1)
+                yaw = float(q[2])
                 if self.teleop_control_mode == "ee":
                     desired_ee_vel = gate_teleop_velocity(
-                        self._joystick_to_ee_velocity(), True
+                        chassis_ee_twist_to_world(self._joystick_to_ee_velocity(), yaw),
+                        True,
                     )
                     desired_velocity = {"ee_velocity": desired_ee_vel}
                     self._current_desired_base_vel = None
                     self._current_desired_ee_vel = desired_ee_vel
                 else:
                     desired_base_vel = gate_teleop_velocity(
-                        self._joystick_to_base_velocity(), True
+                        chassis_base_twist_to_world(
+                            self._joystick_to_base_velocity(), yaw
+                        ),
+                        True,
                     )
                     desired_velocity = {"base_velocity": desired_base_vel}
                     self._current_desired_base_vel = desired_base_vel

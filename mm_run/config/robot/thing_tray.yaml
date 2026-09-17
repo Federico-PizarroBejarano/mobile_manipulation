@@ -1,0 +1,42 @@
+# Gripper + tray: extends thing.yaml with tray EE visual + sphere collision.
+#
+# Use in tray experiments instead of thing.yaml:
+#   include:
+#     - package: "mm_run"
+#       path: "config/robot/thing_tray.yaml"
+#
+# Gripper-only experiments keep config/robot/thing.yaml.
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+
+simulation:
+  robot:
+    urdf:
+      includes:
+        - "$(find mobile_manipulation_central)/urdf/xacro/cartesian_base_joints.urdf.xacro"
+        - "$(find mobile_manipulation_central)/urdf/xacro/thing_no_wheels.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/end_effector_tray_gripped.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/arm_coverage.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/cameras.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/collision.urdf.xacro"
+      args:
+        use_collision: "false"
+        transform_params: "$(find mm_run)/config/robot/urdf_transforms.yaml"
+
+controller:
+  robot:
+    collision_link_names:
+      tool:
+        - "gripper_shaft_collision_link"
+        - "gripper_palm_collision_link"
+        - "tray_collision_link"
+    urdf:
+      includes:
+        - "$(find mobile_manipulation_central)/urdf/xacro/thing_no_wheels.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/end_effector_tray_gripped.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/collision.urdf.xacro"
+      args:
+        use_collision: "True"
+        transform_params: "$(find mm_run)/config/robot/robot_transforms_real.yaml"

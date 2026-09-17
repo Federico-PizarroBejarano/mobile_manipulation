@@ -429,7 +429,8 @@ class CasadiModelInterface:
                             self.robot.collision_link_names["base"]
                             + self.robot.collision_link_names["wrist"]
                             + self.robot.collision_link_names["forearm"]
-                            + self.robot.collision_link_names["upper_arm"],
+                            + self.robot.collision_link_names["upper_arm"]
+                            + self.robot.collision_link_names["tool"],
                         )
                     )
 
@@ -479,7 +480,8 @@ class CasadiModelInterface:
                         self.robot.collision_link_names["base"]
                         + self.robot.collision_link_names["wrist"]
                         + self.robot.collision_link_names["forearm"]
-                        + self.robot.collision_link_names["upper_arm"],
+                        + self.robot.collision_link_names["upper_arm"]
+                        + self.robot.collision_link_names["tool"],
                     )
                 )
 

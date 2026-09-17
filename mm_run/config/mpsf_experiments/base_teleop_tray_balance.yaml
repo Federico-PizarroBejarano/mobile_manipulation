@@ -13,9 +13,9 @@
 #   include scene: config/scene/empty.yaml
 #
 # Cluttered (default below):
-#   acados.name: "MPSF_BaseTeleop_Tray_Clutter"
+#   acados.name: "MPSF_BaseTeleop_Tray_Cluttered"
 #   static_obstacles_collision_avoidance_enabled: True
-#   include scene: config/mpsf_experiments/scenes/tray_teleop_clutter_scene.yaml
+#   include scene: config/mpsf_experiments/scenes/cluttered_scene.yaml
 #
 # Hardware:
 #   roslaunch mobile_manipulation_central thing.launch
@@ -35,6 +35,12 @@ controller:
   base_velocity_guard:
     enabled: true
 
+  base_velocity_idle_gate:
+    enabled: true
+    cmd_eps: 0.001
+    meas_eps: 0.02
+    arm_meas_eps: 0.05
+
   # Slightly less filtering than joystick_teleop_with_obstacles so base accel
   # (and tray tilt) can show up when you push the stick hard.
   cmd_vel_lpf: 0.28
@@ -48,22 +54,22 @@ controller:
       Qk: [1.0, 1.0, 8.0]
       P: [1.0, 1.0, 8.0]
     ControlEffort:
-      Qvb: [0.20, 0.20, 2.0]
-      Qub: [0.20, 0.20, 1.5]
-      Qva: [0.20, 0.20, 0.20, 0.20, 0.20, 0.20]
-      Qua: [0.04, 0.04, 0.04, 0.04, 0.04, 0.04]
+      Qvb: [0.05, 0.05, 0.2]      # some base vel damping (esp. yaw)
+      Qub: [0.1, 0.1, 0.3]        # like joystick-ish, slightly more yaw
+      Qva: [0.15, 0.15, 0.15, 0.15, 0.15, 0.15]  # KEY: stop arm coasting
+      Qua: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
 
   low_level_tracking:
     kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
 
   upright:
     enabled: True
-    eps_align: 1e-3
+    eps_align: 1e-2
 
   teleop:
     enabled: true
     enable_button: 13
-    ee_yaw_buttons: [14, 15]
+    ee_yaw_buttons: [12, 11]  # d-pad left, right
     # Faster than joystick_teleop_with_obstacles (0.3) so tray tilt is observable.
     max_base_vel: [0.5, 0.5, 0.4]
     max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
@@ -78,12 +84,12 @@ controller:
 
   self_collision_avoidance_enabled: True
   # SCENE SWITCH: False for empty, True for cluttered
-  static_obstacles_collision_avoidance_enabled: False
+  static_obstacles_collision_avoidance_enabled: True
 
   # SCENE SWITCH: bump / swap this name when changing empty vs cluttered (or upright).
   acados:
-    name: "MPSF_BaseTeleop_Tray_Empty"
-    # name: "MPSF_BaseTeleop_Tray_Clutter"
+    # name: "MPSF_BaseTeleop_Tray_Empty"
+    name: "MPSF_BaseTeleop_Tray_Cluttered"
     cython:
       recompile: false
     ocp_solver_options:
@@ -94,15 +100,15 @@ simulation:
 
 include:
   - package: "mm_run"
-    path: "config/robot/thing.yaml"
+    path: "config/robot/thing_tray.yaml"
   - package: "mm_run"
     path: "config/controller/MPC.yaml"
   - package: "mm_run"
     path: "config/sim/simulation.yaml"
   - package: "mm_run"
     # SCENE SWITCH: empty vs cluttered
-    path: "config/scene/empty.yaml"
-    # path: "config/mpsf_experiments/scenes/tray_teleop_clutter_scene.yaml"
+    # path: "config/scene/empty.yaml"
+    path: "config/mpsf_experiments/scenes/cluttered_scene.yaml"
 
 logging:
   log_dir: "mpsf_experiments/base_teleop_tray_balance"

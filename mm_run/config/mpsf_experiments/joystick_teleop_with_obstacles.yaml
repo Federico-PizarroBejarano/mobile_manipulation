@@ -9,6 +9,12 @@ controller:
   base_velocity_guard:
     enabled: true
 
+  base_velocity_idle_gate:
+    enabled: true
+    cmd_eps: 0.001
+    meas_eps: 0.04
+    arm_meas_eps: 0.05
+
   cmd_vel_lpf: 0.28                   # heavier output smoothing than MPC.yaml default
   replan_ff_blend_s: 0.15              # ~3 replans @ 20 Hz; 0.5 lags teleop, 0.05 jerky near obstacles
 
@@ -17,8 +23,10 @@ controller:
 
   cost_params:
     ControlEffort:
-      Qvb: [0.30, 0.30, 0.30]
-      Qub: [0.25, 0.25, 0.25]          # penalize base accel on MPSF-completed DoFs
+      Qva: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+      Qvb: [0.01, 0.01, 0.01]
+      Qua: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+      Qub: [0.1, 0.1, 0.1]
 
   low_level_tracking:
     kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
@@ -26,7 +34,7 @@ controller:
   teleop:
     enabled: true
     enable_button: 13  # d-pad up; same button as the hardware relay deadman
-    ee_yaw_buttons: [14, 15]  # d-pad L/R; verify with test_joystick.py
+    ee_yaw_buttons: [12, 11]  # d-pad left, right
     max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
     max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
 
@@ -57,7 +65,7 @@ include:
     path: "config/sim/simulation.yaml"
   - package: "mm_run"
     # path: "config/scene/empty.yaml"
-    path: "config/mpsf_experiments/scenes/ee_teleop_obstacles_scene.yaml"
+    path: "config/mpsf_experiments/scenes/cluttered_scene.yaml"
 
 logging:
   log_dir: "mpsf_experiments/joystick_teleop_with_obstacles"

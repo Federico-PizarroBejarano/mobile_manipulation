@@ -32,7 +32,13 @@ from mm_control.robot import MobileManipulator3D
 from mm_plan.TaskManager import TaskManager
 from mm_run.msg import MpcPlan
 from mm_utils import parsing
-from mm_utils.base_velocity_guard import sanitize_base_velocity
+from mm_utils.base_velocity_guard import (
+    base_velocity_command_from_references,
+    ee_velocity_command_from_references,
+    sanitize_base_velocity,
+    zero_idle_arm_velocity,
+    zero_idle_base_velocity,
+)
 from mm_utils.enums import RefType
 from mm_utils.logging import DataLogger
 from mm_utils.math import wrap_pi_scalar
@@ -243,6 +249,20 @@ class ControllerROSNode:
                 self._base_vel_guard_max_disagreement,
             )
 
+        idle_cfg = self.ctrl_config.get("base_velocity_idle_gate", {})
+        self._idle_base_vel_gate_enabled = bool(idle_cfg.get("enabled", False))
+        self._idle_base_vel_cmd_eps = float(idle_cfg.get("cmd_eps", 1e-3))
+        self._idle_base_vel_meas_eps = float(idle_cfg.get("meas_eps", 0.02))
+        self._idle_arm_vel_meas_eps = float(idle_cfg.get("arm_meas_eps", 0.05))
+        if self._idle_base_vel_gate_enabled:
+            self.controller_log.info(
+                "Base velocity idle gate enabled "
+                "(cmd_eps=%.4f, meas_eps=%.4f, arm_meas_eps=%.4f)",
+                self._idle_base_vel_cmd_eps,
+                self._idle_base_vel_meas_eps,
+                self._idle_arm_vel_meas_eps,
+            )
+
         rospy.on_shutdown(self.shutdownhook)
         self.ctrl_c = False
 
@@ -296,6 +316,40 @@ class ControllerROSNode:
                 "Base velocity guard: replaced joint_states base vel "
                 "(disagreement > %.2f m/s)",
                 self._base_vel_guard_max_disagreement,
+            )
+        return q, v_safe
+
+    def _apply_idle_base_velocity_gate(self, robot_states, references):
+        """Zero tiny measured base/arm vel when the matching velocity cmd is idle."""
+        if not self._idle_base_vel_gate_enabled:
+            return robot_states
+
+        q, v = robot_states
+        v_cmd = base_velocity_command_from_references(references)
+        v_safe, zeroed_base = zero_idle_base_velocity(
+            v,
+            v_cmd,
+            self._idle_base_vel_cmd_eps,
+            self._idle_base_vel_meas_eps,
+        )
+        v_ee_cmd = ee_velocity_command_from_references(references)
+        v_safe, zeroed_arm = zero_idle_arm_velocity(
+            v_safe,
+            v_ee_cmd,
+            self._idle_base_vel_cmd_eps,
+            self._idle_arm_vel_meas_eps,
+        )
+        if zeroed_base:
+            rospy.logdebug_throttle(
+                2.0,
+                "Base velocity idle gate: zeroed measured base vel "
+                "(cmd and meas both below thresholds)",
+            )
+        if zeroed_arm:
+            rospy.logdebug_throttle(
+                2.0,
+                "Arm velocity idle gate: zeroed measured arm vel "
+                "(EE cmd and arm meas both below thresholds)",
             )
         return q, v_safe
 
@@ -750,6 +804,7 @@ class ControllerROSNode:
             self.sot_lock.release()
 
             self.update_references(references, robot_states)
+            robot_states = self._apply_idle_base_velocity_gate(robot_states, references)
 
             tc1 = time.perf_counter()
             try:

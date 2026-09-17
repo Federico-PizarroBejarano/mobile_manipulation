@@ -4,6 +4,7 @@
 # Editors
 .vscode/
 .cursor/
+.cursorindexignore
 .ruff_cache/
 
 # Acados
