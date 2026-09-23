@@ -111,6 +111,7 @@ def train():
 
     # Initialize environment
     env = SimpleGoalEnv(config)
+    env.set_training_step(0)
 
     # Get dimensions
     obs_shape = env.observation_space.shape
@@ -137,6 +138,7 @@ def train():
         tau=sac_config.get("tau"),
         alpha=sac_config.get("alpha"),
         auto_alpha=sac_config.get("auto_alpha"),
+        min_alpha=sac_config.get("min_alpha", 0.0),
         hidden_layers=sac_config["hidden_layers"],
         buffer_size=sac_config.get("buffer_size", 100000),
         device=args.device,
@@ -150,6 +152,8 @@ def train():
     update_freq = rl_config.get("update_freq")  # Update every N steps
     update_after = rl_config.get("update_after")  # Start updating after N steps
     eval_freq = rl_config.get("eval_freq")  # Frequency of evaluation episodes
+    eval_episodes = int(rl_config.get("eval_episodes", 5))
+    final_eval_episodes = int(rl_config.get("final_eval_episodes", 10))
     save_freq = rl_config.get("save_freq")  # Frequency of checkpoint saving
 
     # Training loop
@@ -167,8 +171,13 @@ def train():
     print(f"Max steps: {max_steps}")
     print(f"Start steps (random): {start_steps}")
     print(f"Update after: {update_after}")
-    print(f"Eval frequency: {eval_freq}")
+    print(f"Eval frequency: {eval_freq} ({eval_episodes} episodes)")
     print(f"Save frequency: {save_freq}")
+    if env.orn_curriculum_steps > 0:
+        print(
+            f"Orn curriculum: {env.goal_orn_range_start:.3f} → "
+            f"{env.goal_orn_range_end:.3f} over {env.orn_curriculum_steps} steps"
+        )
     start_time = time.time()
 
     while total_steps < max_steps:
@@ -209,10 +218,11 @@ def train():
                 print(
                     f"Episode {episode_count}, Steps: {total_steps}, "
                     f"Reward: {episode_reward:.2f}, Avg (last 10): {avg_reward:.2f}, "
-                    f"Length: {episode_length}"
+                    f"Length: {episode_length}, orn_range: {env.goal_orn_range:.3f}"
                 )
 
-            # Reset environment
+            # Reset environment with updated curriculum
+            env.set_training_step(total_steps)
             obs, info = env.reset()
             episode_reward = 0
             episode_length = 0
@@ -220,11 +230,15 @@ def train():
         # Evaluation
         if total_steps % eval_freq == 0 and total_steps > 0:
             print(f"\nEvaluating at step {total_steps}...")
-            eval_results = evaluate(env, agent, n_episodes=5)
+            env.set_training_step(total_steps)
+            eval_results = evaluate(env, agent, n_episodes=eval_episodes)
             print(
                 f"Eval - Mean reward: {eval_results['mean_reward']:.2f}, "
-                f"Success rate: {eval_results['success_rate']:.2%}"
+                f"Success rate: {eval_results['success_rate']:.2%} "
+                f"(orn_range={env.goal_orn_range:.3f})"
             )
+            # Resume training curriculum state after eval resets
+            env.set_training_step(total_steps)
 
         # Save checkpoint
         if total_steps % save_freq == 0 and total_steps > 0:
@@ -232,12 +246,14 @@ def train():
             agent.save(str(checkpoint_path))
             print(f"Saved checkpoint to {checkpoint_path}")
 
-    # Final evaluation
+    # Final evaluation (full orientation range)
     print("\nFinal evaluation...")
-    final_eval = evaluate(env, agent, n_episodes=10)
+    env.set_training_step(max_steps)
+    final_eval = evaluate(env, agent, n_episodes=final_eval_episodes)
     print(
         f"Final Eval - Mean reward: {final_eval['mean_reward']:.2f}, "
-        f"Success rate: {final_eval['success_rate']:.2%}"
+        f"Success rate: {final_eval['success_rate']:.2%} "
+        f"(orn_range={env.goal_orn_range:.3f})"
     )
 
     # Save final model

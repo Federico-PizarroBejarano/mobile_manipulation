@@ -375,9 +375,10 @@ class CasadiModelInterface:
             self.collision_pairs["self"] = config["robot"]["collision_pairs"]["self"]
         else:
             # base
-            self.collision_pairs["self"] = [
-                ["ur10_arm_forearm_collision_link", "base_collision_link"]
-            ]
+            self.collision_pairs["self"] = self._addCollisionPairFromTwoGroups(
+                ["ur10_arm_forearm_collision_link"],
+                self.robot.collision_link_names["base"],
+            )
             self.collision_pairs["self"] += self._addCollisionPairFromTwoGroups(
                 self.robot.collision_link_names["base"],
                 self.robot.collision_link_names["wrist"]
@@ -430,16 +431,18 @@ class CasadiModelInterface:
                             + self.robot.collision_link_names["wrist"]
                             + self.robot.collision_link_names["forearm"]
                             + self.robot.collision_link_names["upper_arm"]
-                            + self.robot.collision_link_names["tool"],
+                            + self.robot.collision_link_names["tool"]
+                            + self.robot.collision_link_names["rack"],
                         )
                     )
 
     def _setupCollisionPairDetailed(self):
         """Setup detailed collision pairs for self-collision and obstacles."""
         # base
-        self.collision_pairs_detailed["self"] = [
-            ["ur10_arm_forearm_collision_link", "base_collision_link"]
-        ]
+        self.collision_pairs_detailed["self"] = self._addCollisionPairFromTwoGroups(
+            ["ur10_arm_forearm_collision_link"],
+            self.robot.collision_link_names["base"],
+        )
         self.collision_pairs_detailed["self"] += self._addCollisionPairFromTwoGroups(
             self.robot.collision_link_names["base"],
             self.robot.collision_link_names["wrist"]
@@ -454,13 +457,14 @@ class CasadiModelInterface:
         # forearm
         self.collision_pairs_detailed["self"] += self._addCollisionPairFromTwoGroups(
             self.robot.collision_link_names["forearm"],
-            self.robot.collision_link_names["tool"] + ["rack_collision_link"],
+            self.robot.collision_link_names["tool"]
+            + self.robot.collision_link_names["rack"],
         )
 
         self.collision_pairs_detailed["self"] += self._addCollisionPairFromTwoGroups(
             self.robot.collision_link_names["tool"]
             + self.robot.collision_link_names["wrist"],
-            ["rack_collision_link"],
+            self.robot.collision_link_names["rack"],
         )
 
         for obstacle in self.scene.collision_link_names.get("static_obstacles", []):
@@ -481,7 +485,8 @@ class CasadiModelInterface:
                         + self.robot.collision_link_names["wrist"]
                         + self.robot.collision_link_names["forearm"]
                         + self.robot.collision_link_names["upper_arm"]
-                        + self.robot.collision_link_names["tool"],
+                        + self.robot.collision_link_names["tool"]
+                        + self.robot.collision_link_names["rack"],
                     )
                 )
 

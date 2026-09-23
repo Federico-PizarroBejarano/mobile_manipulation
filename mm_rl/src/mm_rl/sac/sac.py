@@ -50,6 +50,7 @@ class SAC:
         tau=0.005,
         alpha=0.2,
         auto_alpha=True,
+        min_alpha=0.0,
         buffer_size=100000,
         device="cpu",
         infinite_horizon=False,
@@ -61,6 +62,7 @@ class SAC:
         self.tau = tau
         self.device = device
         self.infinite_horizon = infinite_horizon
+        self.min_alpha = float(min_alpha)
 
         # Networks
         self.actor = Actor(state_dim, action_dim, hidden_layers).to(device)
@@ -81,9 +83,16 @@ class SAC:
         if auto_alpha:
             self.target_entropy = -torch.prod(torch.Tensor([action_dim])).item()
             self.log_alpha = torch.zeros(1, requires_grad=True, device=device)
+            if self.min_alpha > 0.0:
+                with torch.no_grad():
+                    self.log_alpha.clamp_(min=float(np.log(self.min_alpha)))
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr)
         else:
-            self.alpha = alpha
+            self.alpha = (
+                max(float(alpha), self.min_alpha)
+                if self.min_alpha > 0
+                else float(alpha)
+            )
 
         # Replay buffer (paper: 10e5)
         self.replay_buffer = ReplayBuffer(capacity=buffer_size)
@@ -91,8 +100,12 @@ class SAC:
     @property
     def alpha_value(self):
         if self.auto_alpha:
-            return self.log_alpha.exp().item()
-        return self.alpha
+            a = self.log_alpha.exp().item()
+        else:
+            a = self.alpha
+        if self.min_alpha > 0.0:
+            return max(a, self.min_alpha)
+        return a
 
     def select_action(self, state, deterministic=False):
         """Select action from policy."""
@@ -189,6 +202,9 @@ class SAC:
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
+            if self.min_alpha > 0.0:
+                with torch.no_grad():
+                    self.log_alpha.clamp_(min=float(np.log(self.min_alpha)))
 
         # Soft update target network
         self._soft_update(self.critic_target, self.critic, self.tau)

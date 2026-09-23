@@ -85,11 +85,11 @@ To use the MPSF plan node instead of standard MPC:
 roslaunch mm_run run_pybullet_sim.launch config:=$(rospack find mm_run)/config/mpsf_experiment.yaml gui:=True teleop:=mpsf
 ```
 
-Direct (non-MPSF) joystick teleop in sim:
+Joystick teleop in sim (same pick-place config; switch mode with `teleop:=`):
 
 ```bash
 roslaunch mm_run run_pybullet_sim.launch \
-  config:=$(rospack find mm_run)/config/mpsf_experiments/direct_teleop.yaml \
+  config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_pick_place.yaml \
   gui:=True teleop:=direct
 ```
 

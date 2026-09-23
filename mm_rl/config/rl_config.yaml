@@ -5,7 +5,9 @@ rl:
   start_steps: 10000  # Random actions before training starts
   update_after: 1000  # Start updating networks after N steps
   update_freq: 1  # Update networks every N steps
-  eval_freq: 10000  # Frequency of evaluation episodes
+  eval_freq: 20000  # Frequency of evaluation episodes
+  eval_episodes: 10  # Episodes per mid-training eval
+  final_eval_episodes: 25
   save_freq: 50000  # Frequency of checkpoint saving
 
   sac:
@@ -14,6 +16,7 @@ rl:
     tau: 0.001  # Soft update coefficient for target networks (paper: 1e-3)
     alpha: 0.2  # Initial entropy coefficient (if not auto-tuning)
     auto_alpha: true  # Automatically tune entropy coefficient
+    min_alpha: 0.05  # Floor so auto-α cannot collapse (~0.003 in recent runs)
     batch_size: 256  # Batch size for training (paper: 256)
     hidden_layers: [512, 512, 256]  # Units per layer (paper: [512, 512, 256])
     buffer_size: 100000  # Replay buffer capacity (paper: 10e5)
@@ -21,26 +24,23 @@ rl:
 
 # Goal generation parameters
 goal:
-  pos_range:  # Goal position range [min, max] for [x, y, z] in meters
-    - [-1.0, -1.0, 0.7]
-    - [1.0, 1.0, 1.0]
-  orn_range: 3.14  # Goal orientation range in radians
+  pos_range:  # Tighter xy so episodes finish faster under slow EE
+    - [-0.5, -0.5, 0.7]
+    - [0.5, 0.5, 1.0]
+  orn_range: 3.14  # Final orientation range (rad) after curriculum
+  orn_range_start: 0.0  # Start of orientation curriculum
+  orn_curriculum_steps: 250000  # Linear ramp start→orn_range over this many env steps
   success_pos_threshold: 0.1  # Position success threshold in meters
   success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
-  obs_horizon_m: 1.5  # Cap obs g look-ahead along planner path (MoMa-style subgoal)
-
-# Episode start: home + light base randomization (arm joints stay at home)
-reset:
-  base_xy_noise: 0.2  # m, uniform in [-noise, noise] for base x and y
-  randomize_yaw: true  # full yaw Uniform[0, 2π)
 
 # Reward parameters (IK: modulation_rl-style normalized L2, -0.5 when at pos_scale/rot_scale)
 reward:
   ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik)
   pos_scale: 0.1   # Position normalization (m), same as modulation_rl ikslack_dist
   rot_scale: 0.05  # Rotation normalization, same as modulation_rl ikslack_rot_dist
-  acceleration_penalty_multiplier: 0.1
-  base_action_penalty_multiplier: 0.1
+  acceleration_penalty_multiplier: 0.02  # Softer settle / smoothness cost
+  base_action_penalty_multiplier: 0.02
+  success_bonus: 10.0  # Sparse bonus on the step that reaches the goal
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -65,18 +65,18 @@ termination:
   slack_rot_threshold: 0.05  # Step counts as failure if rot deviation > this
   ik_fail_thresh: 20         # Terminate when total failure steps >= this
 
-# IK solver parameters (match direct teleop)
+# IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
 ik:
-  regularization_strength: 0.1  # Regularization strength (λ) for minimum displacement goal
+  regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
   use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
 
-# Planner parameters (align with teleop EE linear speed)
+# Planner slower than EE clamp for tracking headroom; teleop authority unchanged
 planner:
-  max_linear_speed: 0.12  # m/s; caps mean linear speed along the position segment of the path
+  max_linear_speed: 0.06  # m/s
 
-# Robot speed override (match hardware teleop / MPSF goal_velocity caps)
+# Match MPC.yaml mpsf_params.goal_velocity (not stricter joystick 0.12 / 0.25)
 robot:
-  base_linear_vel_limit: 0.3   # m/s
+  base_linear_vel_limit: 0.3   # m/s  (max_base_vel)
   base_angular_vel_limit: 0.3  # rad/s
-  ee_linear_vel_limit: 0.12    # m/s clamp before IK
-  ee_angular_vel_limit: 0.25   # rad/s clamp before IK
+  ee_linear_vel_limit: 0.15    # m/s clamp before IK
+  ee_angular_vel_limit: 0.3    # rad/s clamp before IK

@@ -472,7 +472,8 @@ controller:
 
 Other relevant keys: `replan_ff_blend_s` (default `0.4`), `cmd_vel_lpf` (default `0.35`).
 
-Examples: `joystick_teleop_with_obstacles.yaml` (MPSF), `direct_teleop.yaml` (direct). See `config/teleop/README.md`.
+Examples: `teleop_pick_place.yaml` (pick-and-place; mpsf/direct/rl via CLI),
+`teleop_tray.yaml` (tray upright; mpsf/direct). See `config/teleop/README.md`.
 
 Joystick topic is **`/bluetooth_teleop/joy`**. Square/Enter start; Triangle gripper; d-pad up enable. Hardware relay (`joy_stick_relay.py`) also gates motor cmd topics on button 13.
 

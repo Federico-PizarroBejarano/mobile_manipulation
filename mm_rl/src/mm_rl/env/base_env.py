@@ -100,13 +100,6 @@ class BaseRLEnv(gym.Env):
         planner_config = config.get("planner", {})
         self.planner_max_linear_speed = float(planner_config["max_linear_speed"])
 
-        goal_config = config.get("goal", {})
-        self.obs_horizon_m = float(goal_config.get("obs_horizon_m", 1.5))
-
-        reset_config = config.get("reset", {})
-        self.base_xy_noise = float(reset_config.get("base_xy_noise", 0.0))
-        self.randomize_yaw = bool(reset_config.get("randomize_yaw", False))
-
         # End-effector planner (will be initialized in reset)
         self.ee_planner = None
 
@@ -175,7 +168,7 @@ class BaseRLEnv(gym.Env):
         - v_{ee}: EE velocities from planner (6D: linear + angular in base frame)
         - ee: current EE pose (12D: position + rotation matrix in base frame)
         - \hat{ee}: desired EE pose from planner (12D: position + rotation matrix in base frame)
-        - g: goal pose capped at ``obs_horizon_m`` along the planner path (base frame)
+        - g: goal pose (12D: position + rotation matrix in base frame)
         - s_{robot}: joint positions (nq)
         - a_{t-1}: previous action (action_dim)
 
@@ -203,10 +196,9 @@ class BaseRLEnv(gym.Env):
             desired_ee_pos_w, desired_ee_orn_w, base_pos_w, base_orn_w
         )
 
-        # Subgoal g: at most obs_horizon_m along the planner path from current s
-        goal_pos_w, goal_orn_w = self.ee_planner.pose_at_horizon(self.obs_horizon_m)
+        # Final goal in base frame
         goal_pos_b, goal_orn_b = self._world_to_base_frame(
-            goal_pos_w, goal_orn_w, base_pos_w, base_orn_w
+            self.goal_pos, self.goal_orn, base_pos_w, base_orn_w
         )
 
         # Get EE velocities (v_{ee}) from planner command (teleoperator), not actual robot velocity
@@ -233,10 +225,10 @@ class BaseRLEnv(gym.Env):
                 mm_math.quat_to_rot(
                     desired_ee_orn_b
                 ).flatten(),  # \hat{ee}: desired EE rotation matrix (9D)
-                goal_pos_b,  # g: horizon-capped goal position (3D)
+                goal_pos_b,  # g: goal position (3D)
                 mm_math.quat_to_rot(
                     goal_orn_b
-                ).flatten(),  # g: horizon-capped goal rotation matrix (9D)
+                ).flatten(),  # g: goal rotation matrix (9D)
                 q,  # s_{robot}: joint positions (nq)
                 self.prev_action,  # a_{t-1}: previous action (action_dim)
             ]
@@ -280,14 +272,8 @@ class BaseRLEnv(gym.Env):
         """
         super().reset(seed=seed)
 
-        # Reset to home, then lightly randomize base pose
-        q = np.asarray(self.sim.robot.home, dtype=float).copy()
-        if self.base_xy_noise > 0.0:
-            q[0] += self.np_random.uniform(-self.base_xy_noise, self.base_xy_noise)
-            q[1] += self.np_random.uniform(-self.base_xy_noise, self.base_xy_noise)
-        if self.randomize_yaw:
-            q[2] = self.np_random.uniform(0.0, 2.0 * np.pi)
-        self.sim.robot.reset_joint_configuration(q)
+        # Reset to home (no start randomization)
+        self.sim.robot.reset_joint_configuration(self.sim.robot.home)
 
         # Reset step counter
         self.current_step = 0
@@ -301,7 +287,7 @@ class BaseRLEnv(gym.Env):
         )
 
         # Initialize/reset end-effector planner if goal is set
-        ee_pos, ee_orn = self._ee_pose_w(q)
+        ee_pos, ee_orn = self._ee_pose_w()
         self.ee_planner = EEPlanner(
             self.goal_pos,
             self.goal_orn,

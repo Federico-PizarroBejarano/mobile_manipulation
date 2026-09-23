@@ -22,7 +22,15 @@ class SimpleGoalEnv(BaseRLEnv):
         # Goal generation parameters
         self.goal_config = config.get("goal")
         self.goal_pos_range = self.goal_config.get("pos_range")
-        self.goal_orn_range = self.goal_config.get("orn_range")
+        self.goal_orn_range_end = float(self.goal_config.get("orn_range", 0.0))
+        self.goal_orn_range_start = float(
+            self.goal_config.get("orn_range_start", self.goal_orn_range_end)
+        )
+        self.orn_curriculum_steps = int(
+            self.goal_config.get("orn_curriculum_steps", 0) or 0
+        )
+        # Active sampling range (updated by set_training_step during curriculum)
+        self.goal_orn_range = self.goal_orn_range_start
 
         # Success thresholds
         self.success_pos_threshold = self.goal_config.get("success_pos_threshold")
@@ -39,10 +47,29 @@ class SimpleGoalEnv(BaseRLEnv):
         self.base_action_penalty_multiplier = self.reward_config.get(
             "base_action_penalty_multiplier", 0.0
         )
+        self.success_bonus = float(self.reward_config.get("success_bonus", 0.0))
 
         # Initialize goal
         self.goal_pos = None
         self.goal_orn = None
+
+    def set_training_step(self, total_steps):
+        """Update orientation curriculum from total environment steps.
+
+        Linearly interpolates ``goal_orn_range`` from ``orn_range_start`` to
+        ``orn_range`` over ``orn_curriculum_steps``. If curriculum steps are 0,
+        uses the final ``orn_range`` immediately.
+
+        Args:
+            total_steps (int): Global training step count.
+        """
+        if self.orn_curriculum_steps <= 0:
+            self.goal_orn_range = self.goal_orn_range_end
+            return
+        t = min(1.0, float(total_steps) / float(self.orn_curriculum_steps))
+        self.goal_orn_range = self.goal_orn_range_start + t * (
+            self.goal_orn_range_end - self.goal_orn_range_start
+        )
 
     def reset(self, seed=None, options=None):
         """Reset environment and generate new goal.
@@ -140,6 +167,16 @@ class SimpleGoalEnv(BaseRLEnv):
             acceleration_penalty_multiplier=self.acceleration_penalty_multiplier,
             base_action_penalty_multiplier=self.base_action_penalty_multiplier,
         )
+
+        # Sparse success bonus on the step that reaches the goal (episode then ends)
+        if self.success_bonus != 0.0:
+            pos_error = np.linalg.norm(ee_pos_w - self.goal_pos)
+            orn_error = mm_math.quat_orientation_error(ee_orn_w, self.goal_orn)
+            if (
+                pos_error <= self.success_pos_threshold
+                and orn_error <= self.success_orn_threshold
+            ):
+                reward += self.success_bonus
 
         return reward
 

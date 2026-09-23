@@ -16,7 +16,10 @@ from mobile_manipulation_central.ros_interface import (
     JoystickButtonInterface,
     MobileManipulatorROSInterface,
 )
-from robotiq_3f_gripper_articulated_msgs.msg import Robotiq3FGripperRobotOutput
+from robotiq_3f_gripper_articulated_msgs.msg import (
+    Robotiq3FGripperRobotInput,
+    Robotiq3FGripperRobotOutput,
+)
 from scipy.spatial.transform import Rotation as Rot
 from sensor_msgs.msg import Joy
 
@@ -33,6 +36,7 @@ from mm_utils.metrics import MPSFMetricsCollector
 from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
+    seed_gripper_mode_position,
     toggle_gripper_open,
 )
 from mm_utils.teleop_joy import (
@@ -151,6 +155,8 @@ class DirectTeleopROSNode:
         self.gripper_button_interface = JoystickButtonInterface(GRIPPER_TOGGLE_BUTTON)
         self._gripper_open = True
         self._gripper_no_sub_warned = False
+        self._gripper_status = None
+        self._gripper_cmd = None
         self._gripper_pub = rospy.Publisher(
             "/Robotiq3FGripperRobotOutput",
             Robotiq3FGripperRobotOutput,
@@ -159,6 +165,12 @@ class DirectTeleopROSNode:
         self.mpc_plan_pub = rospy.Publisher("mpc_plan", MpcPlan, queue_size=1)
 
         rospy.Subscriber("/bluetooth_teleop/joy", Joy, self._joy_callback)
+        rospy.Subscriber(
+            "/Robotiq3FGripperRobotInput",
+            Robotiq3FGripperRobotInput,
+            self._gripper_status_cb,
+            queue_size=1,
+        )
         rospy.set_param(STICKS_ACTIVE_PARAM, self._sticks_active_param)
         # Shared YAML may set low_level kp for MPC/MPSF; disable P for direct teleop
         # (q_bar is a frozen snapshot, so kp fights stick velocity).
@@ -275,17 +287,32 @@ class DirectTeleopROSNode:
             rate.sleep()
         raise rospy.ROSInterruptException("shutdown while waiting to start")
 
-    def _make_gripper_output_msg(self, is_open):
-        msg = Robotiq3FGripperRobotOutput()
-        msg.rACT = 1
-        msg.rMOD = 0
-        msg.rGTO = 1
-        msg.rATR = 0
-        msg.rICF = 0
-        msg.rPRA = gripper_position(is_open)
-        msg.rSPA = 255
-        msg.rFRA = 150
-        return msg
+    def _gripper_status_cb(self, msg):
+        self._gripper_status = msg
+
+    def _ensure_gripper_cmd(self):
+        """Keep one Robotiq output message; only rPRA changes on later toggles."""
+        if self._gripper_cmd is not None:
+            return self._gripper_cmd
+        cmd = Robotiq3FGripperRobotOutput()
+        cmd.rACT = 1
+        cmd.rGTO = 1
+        cmd.rATR = 0
+        cmd.rICF = 0
+        cmd.rSPA = 255
+        cmd.rFRA = 150
+        if self._gripper_status is not None:
+            r_mod, r_pra = seed_gripper_mode_position(
+                self._gripper_status.gMOD,
+                self._gripper_status.gPRA,
+                self._gripper_open,
+            )
+        else:
+            r_mod, r_pra = seed_gripper_mode_position(None, None, self._gripper_open)
+        cmd.rMOD = r_mod
+        cmd.rPRA = r_pra
+        self._gripper_cmd = cmd
+        return cmd
 
     def _poll_gripper_toggle(self):
         if self.gripper_button_interface.button != 1:
@@ -299,8 +326,12 @@ class DirectTeleopROSNode:
                 )
                 self._gripper_no_sub_warned = True
             return
+        cmd = self._ensure_gripper_cmd()
         self._gripper_open = toggle_gripper_open(self._gripper_open)
-        self._gripper_pub.publish(self._make_gripper_output_msg(self._gripper_open))
+        cmd.rPRA = gripper_position(self._gripper_open)
+        cmd.rACT = 1
+        cmd.rGTO = 1
+        self._gripper_pub.publish(cmd)
         rospy.loginfo(
             "Gripper %s (Triangle/Y)",
             "open" if self._gripper_open else "closed",

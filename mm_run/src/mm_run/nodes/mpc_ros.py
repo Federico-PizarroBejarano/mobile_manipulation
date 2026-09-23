@@ -45,6 +45,7 @@ from mm_utils.math import wrap_pi_scalar
 from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
+    seed_gripper_mode_position,
     toggle_gripper_open,
 )
 from mm_utils.teleop_session_logging import (
@@ -1034,11 +1035,15 @@ class ControllerROSNode:
         cmd.rFRA = 150
         # Preserve current mode so we do not force a mode-change finger dance.
         if self._gripper_status is not None:
-            cmd.rMOD = int(self._gripper_status.gMOD)
-            cmd.rPRA = int(self._gripper_status.gPRA)
+            r_mod, r_pra = seed_gripper_mode_position(
+                self._gripper_status.gMOD,
+                self._gripper_status.gPRA,
+                self._gripper_open,
+            )
         else:
-            cmd.rMOD = 0
-            cmd.rPRA = gripper_position(self._gripper_open)
+            r_mod, r_pra = seed_gripper_mode_position(None, None, self._gripper_open)
+        cmd.rMOD = r_mod
+        cmd.rPRA = r_pra
         self._gripper_cmd = cmd
         return cmd
 

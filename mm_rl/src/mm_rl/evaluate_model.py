@@ -412,6 +412,7 @@ def main():
         tau=sac_config.get("tau"),
         alpha=sac_config.get("alpha"),
         auto_alpha=sac_config.get("auto_alpha"),
+        min_alpha=sac_config.get("min_alpha", 0.0),
         hidden_layers=sac_config["hidden_layers"],
         buffer_size=sac_config.get("buffer_size", 100000),
         device="cpu",

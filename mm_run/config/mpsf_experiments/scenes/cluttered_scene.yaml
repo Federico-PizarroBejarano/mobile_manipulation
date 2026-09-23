@@ -21,9 +21,9 @@ controller:
         - "obstacle_cylinder_1_link"
         - "obstacle_cylinder_2_1_link"
         - "obstacle_cylinder_2_2_link"
-        - "obstacle_cylinder_3_link"
+        - "obstacle_cylinder_3_1_link"
+        - "obstacle_cylinder_3_2_link"
         - "obstacle_cylinder_4_link"
-        - "obstacle_cylinder_5_link"
     urdf:
       package: "mm_assets"
       path: "scenes/urdf/static_obstacles.urdf"

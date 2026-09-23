@@ -1,0 +1,96 @@
+# Teleop pick-and-place (no tray upright). Shared cluttered scene.
+#
+# Mode is CLI only — same config for mpsf / direct / rl:
+#   roslaunch mobile_manipulation_central thing.launch
+#   roslaunch mm_run hardware_teleop.launch teleop:=mpsf|direct|rl \
+#     config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_pick_place.yaml
+#
+# Sim:
+#   roslaunch mm_run teleop.launch
+#   roslaunch mm_run run_pybullet_sim.launch teleop:=mpsf|direct|rl gui:=True \
+#     config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_pick_place.yaml
+#
+# Hold d-pad up to enable. Square or Enter to start/stop. Triangle toggles gripper.
+# RL: sticks command EE; base from SAC. Override checkpoint via rl.checkpoint or
+#   ... teleop:=rl _controller_rl_teleop/checkpoint:=/path/to/final_model.pth
+
+controller:
+  base_mask: [false, false, false]
+  ee_mask: [false, false, false, false, false, false]
+
+  base_velocity_guard:
+    enabled: true
+
+  base_velocity_idle_gate:
+    enabled: true
+    cmd_eps: 0.001
+    meas_eps: 0.04
+    arm_meas_eps: 0.05
+
+  cmd_vel_lpf: 0.28
+  replan_ff_blend_s: 0.15
+
+  collision_safety_margin:
+    static_obstacles: 0.05
+
+  cost_params:
+    ControlEffort:
+      Qva: [0.015, 0.013, 0.011, 0.009, 0.007, 0.005]
+      Qvb: [0.02, 0.02, 0.02]
+      Qua: [0.015, 0.013, 0.011, 0.009, 0.007, 0.005]
+      Qub: [0.2, 0.2, 0.2]
+
+  low_level_tracking:
+    kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
+
+  upright:
+    enabled: false
+
+  teleop:
+    enabled: true
+    enable_button: 13  # d-pad up; same button as the hardware relay deadman
+    ee_yaw_buttons: [12, 11]  # d-pad left, right
+    max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
+    max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
+
+  mpsf_params:
+    objective_horizon: 10
+    decay_rate: 0.85
+    mpsf_weight_multiplier: 1.0
+    mpsf_base_mask: [true, true, true]
+    mpsf_ee_mask: [true, true, true, true, true, true]
+
+  self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: True
+
+  acados:
+    # name: "MPSF_Teleop_PickPlace_Empty"
+    name: "MPSF_Teleop_PickPlace"
+
+# Differential IK for direct / rl EE mode (ignored by mpsf).
+ik:
+  use_weighted_regularization: true
+  regularization_strength: 0.1
+
+rl:
+  checkpoint: "checkpoints/final_model.pth"
+
+simulation:
+  duration: 60
+
+include:
+  - package: "mm_rl"
+    path: "config/rl_config.yaml"
+  - package: "mm_run"
+    path: "config/robot/thing.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"
+  - package: "mm_run"
+    path: "config/sim/simulation.yaml"
+  - package: "mm_run"
+    # path: "config/scene/empty.yaml"
+    path: "config/mpsf_experiments/scenes/cluttered_scene.yaml"
+
+logging:
+  log_dir: "mpsf_experiments/teleop_pick_place"
+  log_level: 20

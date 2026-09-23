@@ -46,45 +46,48 @@
     </link>
   </xacro:macro>
 
-  <!-- Collision sphere for the base -->
-  <xacro:collision_link_sphere name="base_collision_link" radius="0.49"/>
+  <!-- Unused single circumscribed base sphere (prefer front+back below). -->
+  <!-- <xacro:collision_link_sphere name="base_collision_link" radius="0.49"/>
   <joint name="base_collision_joint" type="fixed">
     <origin rpy="0 0 0" xyz="0 0 0"/>
     <parent link="base_link"/>
     <child link="base_collision_link"/>
-  </joint>
+  </joint> -->
 
-  <!-- <xacro:collision_link_sphere name="base_collision_link_front" radius="0.3"/>
+  <!-- Two spheres for rounded-rect Ridgeback footprint (less conservative than r=0.49). -->
+  <xacro:collision_link_sphere name="base_collision_link_front" radius="0.39"/>
   <joint name="base_collision_joint_front" type="fixed">
-    <origin rpy="0 0 0" xyz="0.35 0 -0.08"/>
+    <origin rpy="0 0 0" xyz="0.1 0 0.1"/>
     <parent link="base_link"/>
     <child link="base_collision_link_front"/>
   </joint>
 
-  <xacro:collision_link_sphere name="base_collision_link_back" radius="0.3"/>
+  <xacro:collision_link_sphere name="base_collision_link_back" radius="0.39"/>
   <joint name="base_collision_joint_back" type="fixed">
-    <origin rpy="0 0 0" xyz="-0.25 0 -0.08"/>
+    <origin rpy="0 0 0" xyz="-0.05 0 0.1"/>
     <parent link="base_link"/>
     <child link="base_collision_link_back"/>
-  </joint> -->
+  </joint>
 
-  <xacro:collision_link_cylinder name="rack_collision_link" radius="0.325" length="1"/>
+  <!-- Unused cylinder (not listed under collision_link_names.rack). -->
+  <!-- <xacro:collision_link_cylinder name="rack_collision_link" radius="0.325" length="1"/>
   <joint name="rack_collision_joint" type="fixed">
     <origin rpy="0 0 0" xyz="-0.45 -0. 0.75"/>
     <parent link="base_link"/>
     <child link="rack_collision_link"/>
-  </joint>
+  </joint> -->
 
-  <xacro:collision_link_sphere name="rack_collision_link_sphere_1" radius="0.5"/>
+  <!-- Rear rack poles: small spheres ~5 cm past back, ~10 cm in from sides, z=0.25. -->
+  <xacro:collision_link_sphere name="rack_collision_link_sphere_1" radius="0.05"/>
   <joint name="rack_collision_joint_1" type="fixed">
-    <origin rpy="0 0 0" xyz="-0.45 -0.15 0.75"/>
+    <origin rpy="0 0 0" xyz="-0.45 -0.25 0.25"/>
     <parent link="base_link"/>
     <child link="rack_collision_link_sphere_1"/>
   </joint>
 
-  <xacro:collision_link_sphere name="rack_collision_link_sphere_2" radius="0.5"/>
+  <xacro:collision_link_sphere name="rack_collision_link_sphere_2" radius="0.05"/>
   <joint name="rack_collision_joint_2" type="fixed">
-    <origin rpy="0 0 0" xyz="-0.45 0.15 0.75"/>
+    <origin rpy="0 0 0" xyz="-0.45 0.25 0.25"/>
     <parent link="base_link"/>
     <child link="rack_collision_link_sphere_2"/>
   </joint>
@@ -148,7 +151,7 @@
     <child link="ur10_arm_wrist1_collision_link"/>
   </joint>
 
-  <xacro:collision_link_sphere name="ur10_arm_wrist3_collision_link" radius="0.2"/>
+  <xacro:collision_link_sphere name="ur10_arm_wrist3_collision_link" radius="0.15"/>
   <joint name="ur10_arm_wrist3_collision_joint" type="fixed">
     <origin rpy="0 0 0" xyz="0 0 0"/>
     <parent link="ur10_arm_wrist_3_link"/>
@@ -170,6 +173,14 @@
     <origin rpy="0 0 0" xyz="0 0 0.121"/>
     <parent link="gripper"/>
     <child link="gripper_palm_collision_link"/>
+  </joint>
+
+  <!-- Gripped object / fingertips ahead of palm along gripper +Z (moves with EE). -->
+  <xacro:collision_link_sphere name="gripped_object_collision_link" radius="0.05"/>
+  <joint name="gripped_object_collision_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.22"/>
+    <parent link="gripper"/>
+    <child link="gripped_object_collision_link"/>
   </joint>
 
 </robot>

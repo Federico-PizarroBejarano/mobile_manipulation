@@ -41,8 +41,6 @@ simulation:
     base_link_name: "base"
     base_type: omnidirectional
     urdf:
-#      package: "mm_assets"
-#      path: "thing/urdf/mm_pyb_fingers.urdf"
       package: "mm_assets"
       path: "thing/urdf/thing_sim.urdf"
       includes:
@@ -51,6 +49,7 @@ simulation:
         - "$(find mm_assets)/thing/xacro/end_effector_empty.urdf.xacro"
         - "$(find mm_assets)/thing/xacro/arm_coverage.urdf.xacro"
         - "$(find mm_assets)/thing/xacro/cameras.urdf.xacro"
+        - "$(find mm_assets)/thing/xacro/collision.urdf.xacro"
       args:
         use_collision: "false"
         transform_params: "$(find mm_run)/config/robot/urdf_transforms.yaml"
@@ -70,7 +69,7 @@ controller:
         lower: [ -0.7, -0.7, -0.4, -1.5, -1.5, -2.0, -2.0, -2.0, -2.0 ]
         upper: [  0.7,  0.7,  0.4,  1.5,  1.5,  2.0,  2.0,  2.0,  2.0 ]
       state:
-        lower: [ -3, -3, -2pi, -1pi, -1pi, -1pi, -1pi, -1pi, -1pi,
+        lower: [ -2.7, -3, -2pi, -1pi, -1pi, -1pi, -1pi, -1pi, -1pi,
                  -0.7, -0.7, -0.4, -1.5, -1.5, -2.0, -2.0, -2.0, -2.0 ]
         upper: [ 3, 3, 2pi, 1pi, 1pi, 1pi, 1pi, 1pi, 1pi,
                  0.7, 0.7, 0.4, 1.5, 1.5, 2.0, 2.0, 2.0, 2.0 ]
@@ -92,9 +91,9 @@ controller:
 
     collision_link_names:
       base:
-        - "base_collision_link"
-        # - "base_collision_link_front"
-        #- "base_collision_link_back"
+        # - "base_collision_link"
+        - "base_collision_link_front"
+        - "base_collision_link_back"
 
       rack:
         # - "rack_collision_link"
@@ -115,6 +114,7 @@ controller:
       tool:
         - "gripper_shaft_collision_link"
         - "gripper_palm_collision_link"
+        - "gripped_object_collision_link"
 
 
     urdf:

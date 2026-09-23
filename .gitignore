@@ -21,7 +21,7 @@ __pycache__/
 
 # Results/output data
 results/
-checkpoints/
+checkpoints*/
 logs/
 eval_results/
 bagfiles/

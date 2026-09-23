@@ -1,0 +1,90 @@
+# Teleop tray balancing (upright constraint + tray URDF). Same cluttered scene
+# as teleop_pick_place.yaml; no RL block.
+#
+# Mode is CLI only — mpsf or direct (RL not intended for tray):
+#   roslaunch mobile_manipulation_central thing.launch
+#   roslaunch mm_run hardware_teleop.launch teleop:=mpsf|direct \
+#     config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_tray.yaml
+#
+# Sim:
+#   roslaunch mm_run teleop.launch
+#   roslaunch mm_run run_pybullet_sim.launch teleop:=mpsf|direct gui:=True \
+#     config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_tray.yaml
+#
+# Hold d-pad up to enable. Square or Enter to start/stop. Triangle toggles gripper.
+# Diffs vs pick-place: thing_tray.yaml, upright.enabled true, no mm_rl / rl.
+
+controller:
+  base_mask: [false, false, false]
+  ee_mask: [false, false, false, false, false, false]
+
+  base_velocity_guard:
+    enabled: true
+
+  base_velocity_idle_gate:
+    enabled: true
+    cmd_eps: 0.001
+    meas_eps: 0.04
+    arm_meas_eps: 0.05
+
+  cmd_vel_lpf: 0.28
+  replan_ff_blend_s: 0.15
+
+  collision_safety_margin:
+    static_obstacles: 0.05
+
+  cost_params:
+    ControlEffort:
+      Qva: [0.015, 0.013, 0.011, 0.009, 0.007, 0.005]
+      Qvb: [0.02, 0.02, 0.02]
+      Qua: [0.015, 0.013, 0.011, 0.009, 0.007, 0.005]
+      Qub: [0.2, 0.2, 0.2]
+
+  low_level_tracking:
+    kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
+
+  upright:
+    enabled: true
+    eps_align: 5e-2
+
+  teleop:
+    enabled: true
+    enable_button: 13  # d-pad up; same button as the hardware relay deadman
+    ee_yaw_buttons: [12, 11]  # d-pad left, right
+    max_base_vel: [0.5, 0.5, 0.5]  # [vx, vy, vyaw]
+    max_ee_vel: [0.25, 0.25, 0.25, 0.5, 0.5, 0.5]
+
+  mpsf_params:
+    objective_horizon: 10
+    decay_rate: 0.85
+    mpsf_weight_multiplier: 1.0
+    mpsf_base_mask: [true, true, true]
+    mpsf_ee_mask: [true, true, true, true, true, true]
+
+  self_collision_avoidance_enabled: True
+  static_obstacles_collision_avoidance_enabled: True
+
+  acados:
+    name: "MPSF_Teleop_Tray"
+
+# Differential IK for direct EE mode (ignored by mpsf).
+ik:
+  use_weighted_regularization: true
+  regularization_strength: 0.1
+
+simulation:
+  duration: 60
+
+include:
+  - package: "mm_run"
+    path: "config/robot/thing_tray.yaml"
+  - package: "mm_run"
+    path: "config/controller/MPC.yaml"
+  - package: "mm_run"
+    path: "config/sim/simulation.yaml"
+  - package: "mm_run"
+    path: "config/mpsf_experiments/scenes/cluttered_scene.yaml"
+
+logging:
+  log_dir: "mpsf_experiments/teleop_tray"
+  log_level: 20
