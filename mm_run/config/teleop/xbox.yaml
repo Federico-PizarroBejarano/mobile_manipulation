@@ -1,26 +1,4 @@
-# Teleop configuration for Xbox controller (USB or Bluetooth).
-#
-# Button mappings (sim and hardware):
-#   Button 0:  A — toggle base / EE teleop mode
-#   Button 1:  B — unused by MPSF teleop
-#   Button 2:  X — press once to start (then release)
-#   Button 3:  Y — toggle gripper open / close (normal mode)
-#   Button 4:  LB — Clearpath teleop (do not hold during MPSF)
-#   Button 5:  RB — Clearpath teleop (do not hold during MPSF)
-#   Button 9:  Menu — unused by MPSF teleop
-#   Button 11: D-pad right — EE yaw positive
-#   Button 12: D-pad left — EE yaw negative
-#   Button 13: D-pad up — hardware deadman and MPSF stick enable
-#   Button 14: D-pad down — unused by MPSF teleop
-#
-# Axis mappings:
-#   Axis 0: Left stick X (vy)
-#   Axis 1: Left stick Y (vx)
-#   Axis 2: Left trigger (LT) — EE pitch negative (wy-)
-#   Axis 3: Right stick X — base vyaw or EE wx
-#   Axis 4: Right stick Y — EE vz
-#   Axis 5: Right trigger (RT) — EE pitch positive (wy+)
-
+# See README.md in this directory for the button map.
 joy_node:
   deadzone: 0.1
   autorepeat_rate: 20

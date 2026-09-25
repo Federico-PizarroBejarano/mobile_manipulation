@@ -10,7 +10,7 @@
 #   roslaunch mm_run run_pybullet_sim.launch teleop:=mpsf|direct|rl gui:=True \
 #     config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_pick_place.yaml
 #
-# Hold d-pad up to enable. Square or Enter to start/stop. Triangle toggles gripper.
+# Controls: mm_run/config/teleop/README.md
 # RL: sticks command EE; base from SAC. Override checkpoint via rl.checkpoint or
 #   ... teleop:=rl _controller_rl_teleop/checkpoint:=/path/to/final_model.pth
 
@@ -48,8 +48,6 @@ controller:
 
   teleop:
     enabled: true
-    enable_button: 13  # d-pad up; same button as the hardware relay deadman
-    ee_yaw_buttons: [12, 11]  # d-pad left, right
     max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
     max_ee_vel: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
 

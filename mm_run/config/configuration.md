@@ -452,8 +452,6 @@ Launch selects the plan node with `teleop:=mpsf|direct|none` (`controller.launch
 controller:
   teleop:
     enabled: true
-    enable_button: 13         # d-pad up — hardware deadman and stick enable
-    ee_yaw_buttons: [12, 11]  # d-pad left, right for EE yaw
     max_base_vel: [0.3, 0.3, 0.3]
     max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
 
@@ -475,7 +473,7 @@ Other relevant keys: `replan_ff_blend_s` (default `0.4`), `cmd_vel_lpf` (default
 Examples: `teleop_pick_place.yaml` (pick-and-place; mpsf/direct/rl via CLI),
 `teleop_tray.yaml` (tray upright; mpsf/direct). See `config/teleop/README.md`.
 
-Joystick topic is **`/bluetooth_teleop/joy`**. Square/Enter start; Triangle gripper; d-pad up enable. Hardware relay (`joy_stick_relay.py`) also gates motor cmd topics on button 13.
+Joystick topic is **`/bluetooth_teleop/joy`**. Button map: `config/teleop/README.md`. Indices: `mm_utils/teleop_mapping.py`.
 
 
 ## Logging

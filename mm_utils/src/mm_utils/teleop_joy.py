@@ -3,10 +3,13 @@
 import numpy as np
 
 from mm_utils.base_velocity_guard import body_twist_to_world
-
-# D-pad up. Same index as the hardware relay deadman in
-# mobile_manipulation_central/joy_stick_relay.py (enable_button).
-HARDWARE_DEADMAN_BUTTON = 13
+from mm_utils.teleop_mapping import (
+    EE_PITCH_AXIS,
+    EE_ROLL_BUTTONS,
+    EE_YAW_BUTTONS,
+    ENABLE_TRIGGER_AXIS,
+    ENABLE_TRIGGER_THRESHOLD,
+)
 
 # low_level_cmd_node zeros output when this param is False (teleop gate).
 STICKS_ACTIVE_PARAM = "/teleop_sticks_active"
@@ -19,8 +22,6 @@ TELEOP_MODE_PARAM = "/mm_run/teleop_mode"
 
 TELEOP_DEFAULTS = {
     "enabled": False,
-    "enable_button": HARDWARE_DEADMAN_BUTTON,
-    "ee_yaw_buttons": [12, 11],  # d-pad left, right
     "max_base_vel": [0.3, 0.3, 0.3],
     "max_ee_vel": [0.12, 0.12, 0.12, 0.25, 0.25, 0.25],
 }
@@ -84,14 +85,11 @@ def gate_teleop_velocity(desired_vel, enabled):
     return np.zeros_like(desired_vel)
 
 
-def teleop_enable_held(buttons, enable_button_index):
-    """True when teleop enable button is pressed; always True if index is None."""
-    if enable_button_index is None:
-        return True
-    idx = int(enable_button_index)
-    if idx < 0 or idx >= len(buttons):
+def teleop_enable_held(axes):
+    """True when the remapped enable trigger is pulled past threshold."""
+    if ENABLE_TRIGGER_AXIS >= len(axes):
         return False
-    return bool(buttons[idx])
+    return float(axes[ENABLE_TRIGGER_AXIS]) > ENABLE_TRIGGER_THRESHOLD
 
 
 def axes_to_base_velocity(joy_axes, max_base_vel):
@@ -112,28 +110,27 @@ def axes_to_base_velocity(joy_axes, max_base_vel):
     )
 
 
-def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel, ee_yaw_buttons):
-    """Map joy axes + yaw buttons to teleop EE twist.
+def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel):
+    """Map joy axes + d-pad buttons to teleop EE twist.
 
     Returns ``[vx, vy, vz, wx, wy, wz]`` with linear velocity in the chassis
-    frame and angular velocity in the EE body frame (right stick → body roll,
-    bumpers → body pitch, yaw buttons → body yaw). Callers must convert with
-    :func:`teleop_ee_twist_for_control` (MPC / spatial IK) or
+    frame and angular velocity in the EE body frame (right stick X → body
+    pitch, d-pad up/down → body yaw, d-pad left/right → body roll). Callers
+    must convert with :func:`teleop_ee_twist_for_control` (MPC / spatial IK) or
     :func:`teleop_ee_twist_to_world` (world-frame consumers).
     """
     joy_axes = np.asarray(joy_axes, dtype=float).reshape(-1)
     max_ee_vel = np.asarray(max_ee_vel, dtype=float).reshape(6)
-    left_idx, right_idx = ee_yaw_buttons
-    joy_wy = float(joy_axes[5]) - float(joy_axes[4])
-    joy_wz = ee_yaw_from_buttons(buttons, left_idx, right_idx)
+    joy_wx = ee_yaw_from_buttons(buttons, *EE_ROLL_BUTTONS)
+    joy_wz = ee_yaw_from_buttons(buttons, *EE_YAW_BUTTONS)
     return np.array(
         [
             joy_axes[1] * max_ee_vel[0],
             joy_axes[0] * max_ee_vel[1],
             joy_axes[3] * max_ee_vel[2],
-            joy_axes[2] * max_ee_vel[3],
-            joy_wy * max_ee_vel[4],
-            joy_wz * max_ee_vel[5],
+            joy_wx * max_ee_vel[3],
+            -joy_axes[EE_PITCH_AXIS] * max_ee_vel[4],
+            -joy_wz * max_ee_vel[5],
         ],
         dtype=float,
     )
@@ -158,13 +155,8 @@ def parse_teleop_config(controller_config=None):
     """Parse ``controller.teleop`` stick/deadman settings."""
     controller_config = controller_config or {}
     section = controller_config.get("teleop") or {}
-    enable_btn = section.get("enable_button", TELEOP_DEFAULTS["enable_button"])
     return {
         "enabled": bool(section.get("enabled", TELEOP_DEFAULTS["enabled"])),
-        "enable_button": int(enable_btn) if enable_btn is not None else None,
-        "ee_yaw_buttons": list(
-            section.get("ee_yaw_buttons", TELEOP_DEFAULTS["ee_yaw_buttons"])
-        ),
         "max_base_vel": np.asarray(
             section.get("max_base_vel", TELEOP_DEFAULTS["max_base_vel"]), dtype=float
         ),

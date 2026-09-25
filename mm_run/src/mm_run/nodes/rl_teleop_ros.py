@@ -172,8 +172,6 @@ class RLTeleopROSNode:
             raise ValueError("rl_teleop_ros requires controller.teleop.enabled: true")
 
         self.teleop_max_ee_vel = teleop_cfg["max_ee_vel"]
-        self.teleop_enable_button = teleop_cfg["enable_button"]
-        self.teleop_ee_yaw_buttons = teleop_cfg["ee_yaw_buttons"]
 
         self.nu = int(self.ctrl_config["robot"]["dims"]["u"])
         self.dof = int(self.ctrl_config["robot"]["dims"]["q"])
@@ -284,7 +282,7 @@ class RLTeleopROSNode:
         self.joy_axes = np.zeros(6)
         self.joy_buttons = np.zeros(16)
         self.joy_lock = threading.Lock()
-        self._sticks_active_param = self.teleop_enable_button is None
+        self._sticks_active_param = False
         self.ctrl_c = False
 
         self.robot_interface = MobileManipulatorROSInterface()
@@ -312,8 +310,7 @@ class RLTeleopROSNode:
 
         rospy.set_param(FORCE_ZERO_LL_KP_PARAM, True)
         rospy.loginfo(
-            "RL teleop: enable_button=%s max_ee_vel=%s checkpoint=%s",
-            self.teleop_enable_button,
+            "RL teleop: max_ee_vel=%s checkpoint=%s",
             self.teleop_max_ee_vel,
             ckpt_path,
         )
@@ -455,7 +452,7 @@ class RLTeleopROSNode:
         with self.joy_lock:
             axes = self.joy_axes.copy()
             buttons = self.joy_buttons.copy()
-            enabled = teleop_enable_held(buttons, self.teleop_enable_button)
+            enabled = teleop_enable_held(axes)
 
         desired_ee_cmd = np.zeros(6, dtype=float)
         desired_base_vel = np.zeros(3, dtype=float)
@@ -474,9 +471,7 @@ class RLTeleopROSNode:
         yaw = float(q[2])
         ee_pos, ee_orn = self.robot_mdl.getEE(q)
         desired_ee_cmd = teleop_ee_twist_to_world(
-            axes_to_ee_velocity(
-                axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
-            ),
+            axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel),
             yaw,
             Rot.from_quat(ee_orn).as_matrix(),
         )

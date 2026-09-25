@@ -11,7 +11,7 @@
 #   roslaunch mm_run run_pybullet_sim.launch teleop:=mpsf|direct gui:=True \
 #     config:=$(rospack find mm_run)/config/mpsf_experiments/teleop_tray.yaml
 #
-# Hold d-pad up to enable. Square or Enter to start/stop. Triangle toggles gripper.
+# Controls: mm_run/config/teleop/README.md
 # Diffs vs pick-place: thing_tray.yaml, upright.enabled true, no mm_rl / rl.
 
 controller:
@@ -49,8 +49,6 @@ controller:
 
   teleop:
     enabled: true
-    enable_button: 13  # d-pad up; same button as the hardware relay deadman
-    ee_yaw_buttons: [12, 11]  # d-pad left, right
     max_base_vel: [0.5, 0.5, 0.5]  # [vx, vy, vyaw]
     max_ee_vel: [0.25, 0.25, 0.25, 0.5, 0.5, 0.5]
 

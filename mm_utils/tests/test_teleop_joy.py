@@ -2,7 +2,6 @@ import numpy as np
 
 from mm_utils.teleop_joy import (
     FORCE_ZERO_LL_KP_PARAM,
-    HARDWARE_DEADMAN_BUTTON,
     STICKS_ACTIVE_PARAM,
     TELEOP_MODE_PARAM,
     VALID_TELEOP_MODES,
@@ -17,6 +16,14 @@ from mm_utils.teleop_joy import (
     teleop_ee_twist_for_control,
     teleop_ee_twist_to_world,
     teleop_enable_held,
+)
+from mm_utils.teleop_mapping import (
+    EE_PITCH_AXIS,
+    EE_ROLL_BUTTONS,
+    EE_YAW_BUTTONS,
+    ENABLE_TRIGGER_AXIS,
+    HARDWARE_DEADMAN_AXIS,
+    hardware_deadman_held,
 )
 
 
@@ -58,17 +65,22 @@ class TestGateTeleopVelocity:
 
 
 class TestTeleopEnableHeld:
-    def test_none_always_enabled(self):
-        assert teleop_enable_held([0, 0, 0], None) is True
+    def test_left_trigger_held(self):
+        axes = [0.0] * 6
+        axes[ENABLE_TRIGGER_AXIS] = 0.6
+        assert teleop_enable_held(axes) is True
+        axes[ENABLE_TRIGGER_AXIS] = 0.4
+        assert teleop_enable_held(axes) is False
 
-    def test_button_held(self):
-        buttons = [0] * 6
-        buttons[5] = 1
-        assert teleop_enable_held(buttons, 5) is True
-        assert teleop_enable_held(buttons, 4) is False
+    def test_missing_trigger_slot(self):
+        assert teleop_enable_held([0.0, 1.0]) is False
 
-    def test_out_of_range_index(self):
-        assert teleop_enable_held([0, 1], 5) is False
+    def test_hardware_deadman_raw_axis(self):
+        axes = [0.0] * 6
+        axes[HARDWARE_DEADMAN_AXIS] = 1.0
+        assert hardware_deadman_held(axes) is False
+        axes[HARDWARE_DEADMAN_AXIS] = -0.1
+        assert hardware_deadman_held(axes) is True
 
 
 class TestParseGoalVelocityParams:
@@ -147,14 +159,41 @@ class TestTeleopEeTwistToWorld:
 
 
 class TestAxesToEeVelocity:
-    def test_full_deflection_with_yaw_button(self):
-        axes = np.array([0.5, 1.0, -0.5, 0.5, 0.0, 1.0])  # wy = rt - lt = 1
+    def test_full_deflection_stick_pitch_and_dpad_angles(self):
+        axes = np.zeros(6)
+        axes[0] = 0.5
+        axes[1] = 1.0
+        axes[EE_PITCH_AXIS] = -0.5
+        axes[3] = 0.5
         buttons = [0] * 16
-        buttons[11] = 1  # right yaw (d-pad right)
+        buttons[EE_ROLL_BUTTONS[1]] = 1
+        buttons[EE_YAW_BUTTONS[1]] = 1
         max_vel = np.array([0.12, 0.12, 0.12, 0.25, 0.25, 0.25])
-        out = axes_to_ee_velocity(axes, buttons, max_vel, [12, 11])
-        # Linear chassis; angular EE body (wx from stick, wy bumpers, wz buttons)
-        np.testing.assert_allclose(out, [0.12, 0.06, 0.06, -0.125, 0.25, 0.25])
+        out = axes_to_ee_velocity(axes, buttons, max_vel)
+        np.testing.assert_allclose(out, [0.12, 0.06, 0.06, 0.25, 0.125, -0.25])
+
+    def test_dpad_up_is_positive_yaw(self):
+        axes = np.zeros(6)
+        buttons = [0] * 16
+        buttons[13] = 1
+        out = axes_to_ee_velocity(axes, buttons, np.ones(6))
+        np.testing.assert_allclose(out[5], 1.0)
+        np.testing.assert_allclose(out[4], 0.0)
+
+    def test_dpad_left_is_negative_roll(self):
+        axes = np.zeros(6)
+        buttons = [0] * 16
+        buttons[EE_ROLL_BUTTONS[0]] = 1
+        out = axes_to_ee_velocity(axes, buttons, np.ones(6))
+        np.testing.assert_allclose(out[3], -1.0)
+
+    def test_right_stick_x_is_pitch_not_yaw(self):
+        axes = np.zeros(6)
+        axes[EE_PITCH_AXIS] = 1.0
+        out = axes_to_ee_velocity(axes, [0] * 16, np.ones(6))
+        np.testing.assert_allclose(out[3], 0.0)
+        np.testing.assert_allclose(out[4], -1.0)
+        np.testing.assert_allclose(out[5], 0.0)
 
 
 class TestJointVelocityCommand:
@@ -177,25 +216,28 @@ class TestParseTeleopConfig:
     def test_defaults(self):
         cfg = parse_teleop_config({})
         assert cfg["enabled"] is False
-        assert cfg["enable_button"] == HARDWARE_DEADMAN_BUTTON
         np.testing.assert_array_equal(cfg["max_base_vel"], [0.3, 0.3, 0.3])
-        assert cfg["ee_yaw_buttons"] == [12, 11]
+        assert "enable_axis" not in cfg
+        assert "ee_yaw_buttons" not in cfg
+        assert "ee_pitch_buttons" not in cfg
 
-    def test_controller_teleop_section(self):
+    def test_controller_teleop_section_ignores_mapping_keys(self):
         cfg = parse_teleop_config(
             {
                 "teleop": {
                     "enabled": True,
-                    "enable_button": 13,
+                    "enable_axis": None,
                     "max_base_vel": [0.5, 0.5, 0.4],
                     "max_ee_vel": [0.1, 0.1, 0.1, 0.2, 0.2, 0.2],
                     "ee_yaw_buttons": [4, 5],
+                    "ee_pitch_buttons": [1, 2],
                 }
             }
         )
         assert cfg["enabled"] is True
         np.testing.assert_array_equal(cfg["max_base_vel"], [0.5, 0.5, 0.4])
-        assert cfg["ee_yaw_buttons"] == [4, 5]
+        assert "enable_axis" not in cfg
+        assert "ee_yaw_buttons" not in cfg
 
     def test_sticks_active_param_name(self):
         assert STICKS_ACTIVE_PARAM == "/teleop_sticks_active"

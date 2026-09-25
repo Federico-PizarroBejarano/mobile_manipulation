@@ -130,7 +130,7 @@ Experiment configs (task, not mode):
 ```bash
 roslaunch mobile_manipulation_central thing.launch
 ```
-(`thing.launch` only enables the relay node via `use_joy_stick_relay` default `true`. The joy topic `/bluetooth_teleop/joy` and enable button index `13` (d-pad up) are **hardcoded** in `mobile_manipulation_central/joy_stick_relay.py`)
+(`thing.launch` only enables the relay node via `use_joy_stick_relay` default `true`. Button/axis indices live in `mm_utils/teleop_mapping.py`.)
 
 Gripper bringup: `thing.launch` / `gripper.launch` default `activate_gripper:=true` runs a one-shot that activates the Robotiq **only if** it is not already ready (safe if a tray is already gripped). Pass `activate_gripper:=false` to skip. Rebuild `mobile_manipulation_central` after pulling so the one-shot is installed.
 
@@ -174,40 +174,42 @@ roslaunch mm_run run_pybullet_sim.launch teleop:=rl gui:=True \
 
 ### Button map (PS4 / Xbox)
 
-| Button | PS4 | Xbox | Role |
-|--------|-----|------|------|
-| D-pad up | 13 | 13 | Hardware deadman and stick enable — hold to drive |
-| L1 / LB | 4 | 4 | Clearpath teleop — **do not hold during mm teleop** |
-| R1 / RB | 5 | 5 | Clearpath teleop — **do not hold during mm teleop** |
-| Circle / B | 1 | 1 | Unused |
-| Triangle / Y | 3 | 3 | Toggle gripper open / close (normal mode) |
-| Cross / A | 0 | 0 | Toggle base ↔ EE teleop mode (`mpsf`/`direct` only; unused in `rl`) |
-| Square / X | 2 | 2 | Start / stop experiment |
-| D-pad L / R | 12 / 11 | 12 / 11 | EE yaw |
-| D-pad down | 14 | 14 | Unused |
+Indices are only in `mm_utils/src/mm_utils/teleop_mapping.py`. Change mappings there.
 
-### Verify d-pad indices
+| PS4 | Xbox | Role |
+|-----|------|------|
+| L2 | LT | Deadman and stick enable — hold past halfway |
+| L1 | LB | Clearpath teleop — **do not hold during mm teleop** |
+| R1 | RB | Clearpath teleop — **do not hold during mm teleop** |
+| Circle | B | Unused |
+| Triangle | Y | Toggle gripper open / close |
+| Cross | A | Toggle base ↔ EE (`mpsf`/`direct`; unused in `rl`) |
+| Square | X | Start / stop experiment |
+| Right stick X | Right stick X | EE pitch (base yaw in base mode) |
+| D-pad L / R | D-pad L / R | EE roll |
+| D-pad up / down | D-pad up / down | EE yaw |
 
-Before first hardware run, confirm d-pad left/right button numbers (joy already up on the robot):
+### Verify indices
+
 ```bash
 rosrun mm_run test_joystick.py ps4
 ```
-Or in sim / without lab joy: `roslaunch mm_run teleop.launch controller_type:=ps4` first. Press d-pad left and right; update `controller.teleop.ee_yaw_buttons` in the experiment YAML if indices differ from `[12, 11]` (left, right).
+Or `roslaunch mm_run teleop.launch controller_type:=ps4`. If a physical button's index differs, edit `teleop_mapping.py`.
 
 ### During an experiment
 
 1. Position robot with Clearpath L1/LB + sticks (experiment not running).
 2. Press **Square** or **Enter** to start.
-3. Hold **d-pad up** and move the sticks. Releasing it stops the motors and ignores the sticks.
+3. Hold **left trigger (L2/LT)** and move the sticks. Releasing it stops the motors and ignores the sticks.
 4. Press Cross to toggle base / EE mode (direct EE uses arm-only differential IK; base stays still).
 5. Press **Triangle** to toggle the gripper open / close (normal mode; ignored in sim if the driver is not running).
-6. Press Square again to stop. Release d-pad up for an immediate hardware stop.
+6. Press Square again to stop. Release left trigger for an immediate hardware stop.
 7. Do not hold L1/R1 (Clearpath).
 
 Stick teleop requires `controller.teleop.enabled: true`. Gate param: `/teleop_sticks_active`. Direct EE IK params live under top-level `ik:` in the experiment YAML (defaults match RL).
 
 If sticks move but nothing happens, check the warn log for `pressed buttons=[...]`.
-You need `13` (d-pad up) in that list.
+The left trigger axis must be pulled past halfway.
 
 ## Logging and rosbags
 

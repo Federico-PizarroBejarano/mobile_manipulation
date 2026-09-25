@@ -97,8 +97,6 @@ class DirectTeleopROSNode:
 
         self.teleop_max_base_vel = teleop_cfg["max_base_vel"]
         self.teleop_max_ee_vel = teleop_cfg["max_ee_vel"]
-        self.teleop_enable_button = teleop_cfg["enable_button"]
-        self.teleop_ee_yaw_buttons = teleop_cfg["ee_yaw_buttons"]
 
         self.nu = int(self.ctrl_config["robot"]["dims"]["u"])
         self.dof = int(self.ctrl_config["robot"]["dims"]["q"])
@@ -147,7 +145,7 @@ class DirectTeleopROSNode:
         self.joy_lock = threading.Lock()
         self.teleop_control_mode = "base"
         self._last_toggle_button_state = False
-        self._sticks_active_param = self.teleop_enable_button is None
+        self._sticks_active_param = False
         self.ctrl_c = False
 
         self.robot_interface = MobileManipulatorROSInterface()
@@ -180,8 +178,7 @@ class DirectTeleopROSNode:
         rospy.on_shutdown(self._on_shutdown)
 
         rospy.loginfo(
-            "Direct teleop: enable_button=%s max_base_vel=%s (EE uses diff IK)",
-            self.teleop_enable_button,
+            "Direct teleop: max_base_vel=%s (EE uses diff IK)",
             self.teleop_max_base_vel,
         )
 
@@ -243,7 +240,7 @@ class DirectTeleopROSNode:
                         rospy.loginfo("Switched to base control mode")
                 self._last_toggle_button_state = pressed
 
-            enabled = teleop_enable_held(self.joy_buttons, self.teleop_enable_button)
+            enabled = teleop_enable_held(self.joy_axes)
             if enabled != self._sticks_active_param:
                 self._sticks_active_param = enabled
                 rospy.set_param(STICKS_ACTIVE_PARAM, bool(enabled))
@@ -342,7 +339,7 @@ class DirectTeleopROSNode:
             axes = self.joy_axes.copy()
             buttons = self.joy_buttons.copy()
             mode = self.teleop_control_mode
-            enabled = teleop_enable_held(buttons, self.teleop_enable_button)
+            enabled = teleop_enable_held(axes)
 
         desired_base_vel = np.zeros(3, dtype=float)
         desired_ee_vel = np.zeros(6, dtype=float)
@@ -377,9 +374,7 @@ class DirectTeleopROSNode:
             )
 
         desired_ee_vel = teleop_ee_twist_for_control(
-            axes_to_ee_velocity(
-                axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
-            ),
+            axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel),
             yaw,
         )
         J = spatial_jacobian(self.robot_mdl, q)

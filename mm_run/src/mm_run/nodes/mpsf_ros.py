@@ -44,10 +44,8 @@ class MPSFControllerROSNode(ControllerROSNode):
         self.teleop_max_ee_vel = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
         self.teleop_control_mode = "base"
         self._last_toggle_button_state = False
-        self.teleop_enable_button = None
-        self.teleop_ee_yaw_buttons = [12, 11]
         self._teleop_enable_active = False
-        self._sticks_active_param = True
+        self._sticks_active_param = False
 
         self.metrics_collector = MPSFMetricsCollector()
         self._metrics_saved = False
@@ -70,19 +68,7 @@ class MPSFControllerROSNode(ControllerROSNode):
             rospy.loginfo("Teleoperation mode enabled - MPSF goals will be ignored")
             self.teleop_max_base_vel = teleop_cfg["max_base_vel"]
             self.teleop_max_ee_vel = teleop_cfg["max_ee_vel"]
-            self.teleop_enable_button = teleop_cfg["enable_button"]
-            self.teleop_ee_yaw_buttons = teleop_cfg["ee_yaw_buttons"]
-            if self.teleop_enable_button is not None:
-                rospy.loginfo(
-                    "MPSF teleop enable button: %d (hold to apply stick inputs)",
-                    self.teleop_enable_button,
-                )
-            rospy.loginfo(
-                "MPSF EE yaw buttons: left=%d right=%d",
-                self.teleop_ee_yaw_buttons[0],
-                self.teleop_ee_yaw_buttons[1],
-            )
-            self._sticks_active_param = self.teleop_enable_button is None
+            self._sticks_active_param = False
             rospy.set_param(STICKS_ACTIVE_PARAM, self._sticks_active_param)
             self._update_mpsf_masks()
 
@@ -123,18 +109,10 @@ class MPSFControllerROSNode(ControllerROSNode):
                         self.teleop_control_mode = "base"
                         rospy.loginfo("Switched to base control mode")
                     self._update_mpsf_masks()
-                    if self.teleop_enable_button is not None:
-                        rospy.loginfo(
-                            "Mode toggled — keep d-pad up (btn %d) held "
-                            "or stick inputs stay gated",
-                            self.teleop_enable_button,
-                        )
                 self._last_toggle_button_state = pressed
 
             if self.teleop_enabled:
-                enabled = teleop_enable_held(
-                    self.joy_buttons, self.teleop_enable_button
-                )
+                enabled = teleop_enable_held(self.joy_axes)
                 if enabled != self._sticks_active_param:
                     self._sticks_active_param = enabled
                     rospy.set_param(STICKS_ACTIVE_PARAM, bool(enabled))
@@ -150,9 +128,7 @@ class MPSFControllerROSNode(ControllerROSNode):
         with self.joy_lock:
             axes = self.joy_axes.copy()
             buttons = self.joy_buttons.copy()
-        return axes_to_ee_velocity(
-            axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
-        )
+        return axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel)
 
     def _update_mpsf_masks(self):
         if not self.teleop_enabled:
@@ -170,7 +146,7 @@ class MPSFControllerROSNode(ControllerROSNode):
     def update_references(self, references, robot_states):
         if self.teleop_enabled:
             self.joy_lock.acquire()
-            enabled = teleop_enable_held(self.joy_buttons, self.teleop_enable_button)
+            enabled = teleop_enable_held(self.joy_axes)
             stick_mag = float(np.linalg.norm(self.joy_axes[:4]))
             pressed = [i for i, b in enumerate(self.joy_buttons) if b == 1]
             self.joy_lock.release()
@@ -182,24 +158,17 @@ class MPSFControllerROSNode(ControllerROSNode):
                 else:
                     self.controller.reset()
                     rospy.loginfo("MPSF teleop released: cleared MPC warm start")
-                if self.teleop_enable_button is not None:
-                    state = "active" if enabled else "idle (enable button released)"
-                    rospy.loginfo(
-                        "MPSF teleop sticks %s (enable_button=%s, pressed=%s)",
-                        state,
-                        self.teleop_enable_button,
-                        pressed,
-                    )
-            elif (
-                self.teleop_enable_button is not None
-                and not enabled
-                and stick_mag > 0.2
-            ):
+                state = "active" if enabled else "idle (left trigger released)"
+                rospy.loginfo(
+                    "MPSF teleop sticks %s (pressed=%s)",
+                    state,
+                    pressed,
+                )
+            elif not enabled and stick_mag > 0.2:
                 rospy.logwarn_throttle(
                     2.0,
-                    "Sticks deflected but d-pad up (btn %s) not held "
-                    "(pressed buttons=%s). Hold d-pad up to drive.",
-                    self.teleop_enable_button,
+                    "Sticks deflected but left trigger not held "
+                    "(pressed buttons=%s). Hold left trigger to drive.",
                     pressed,
                 )
 

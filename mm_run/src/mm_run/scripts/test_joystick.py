@@ -20,34 +20,10 @@ def test_joystick(controller_type="xbox"):
 
     print(f"Testing {controller_type} controller...")
     print(f"Listening to topic: {joy_topic}")
+    print("Button map: mm_run/config/teleop/README.md")
     print("Press Ctrl+C to exit\n")
 
-    if controller_type == "ps4":
-        print("PS4 Button mappings:")
-        print("  Button 0: Cross (toggle base/EE mode)")
-        print("  Button 1: Circle (unused by MPSF teleop)")
-        print("  Button 2: Square (start/end)")
-        print("  Button 3: Triangle (toggle gripper open/close)")
-        print("  Button 4: L1 (Clearpath teleop — not during MPSF)")
-        print("  Button 5: R1 (Clearpath teleop — not during MPSF)")
-        print("  Button 11: D-pad right (EE yaw +)")
-        print("  Button 12: D-pad left (EE yaw -)")
-        print("  Button 13: D-pad up (hardware deadman + MPSF stick enable)")
-        print("  Button 14: D-pad down (unused)")
-    else:  # xbox
-        print("XBOX Button mappings:")
-        print("  Button 0: A (toggle base/EE mode)")
-        print("  Button 1: B (unused by MPSF teleop)")
-        print("  Button 2: X (start/end)")
-        print("  Button 3: Y (toggle gripper open/close)")
-        print("  Button 4: LB (Clearpath teleop — not during MPSF)")
-        print("  Button 5: RB (Clearpath teleop — not during MPSF)")
-        print("  Button 11: D-pad right (EE yaw +)")
-        print("  Button 12: D-pad left (EE yaw -)")
-        print("  Button 13: D-pad up (hardware deadman + MPSF stick enable)")
-        print("  Button 14: D-pad down (unused)")
-
-    print("\nWaiting for joystick messages...")
+    print("Waiting for joystick messages...")
     print("Press buttons or move sticks to see values\n")
 
     def joy_callback(msg):
