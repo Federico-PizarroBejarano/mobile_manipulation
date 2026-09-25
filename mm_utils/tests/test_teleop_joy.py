@@ -9,12 +9,13 @@ from mm_utils.teleop_joy import (
     axes_to_base_velocity,
     axes_to_ee_velocity,
     chassis_base_twist_to_world,
-    chassis_ee_twist_to_world,
     ee_yaw_from_buttons,
     gate_teleop_velocity,
     joint_velocity_command,
     parse_goal_velocity_params,
     parse_teleop_config,
+    teleop_ee_twist_for_control,
+    teleop_ee_twist_to_world,
     teleop_enable_held,
 )
 
@@ -109,16 +110,40 @@ class TestChassisBaseTwistToWorld:
         np.testing.assert_allclose(out, [0.0, 1.0, 0.15], atol=1e-12)
 
 
-class TestChassisEeTwistToWorld:
+class TestTeleopEeTwistForControl:
     def test_yaw_zero_passthrough(self):
         tw = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6])
-        np.testing.assert_allclose(chassis_ee_twist_to_world(tw, 0.0), tw)
+        np.testing.assert_allclose(teleop_ee_twist_for_control(tw, 0.0), tw)
 
-    def test_yaw_pi_over_two_rotates_lin_and_ang(self):
-        # Chassis +x lin / +x ang -> world +y; vz and wz unchanged
-        tw = np.array([1.0, 0.0, 0.3, 0.5, 0.0, 0.25])
-        out = chassis_ee_twist_to_world(tw, np.pi / 2)
-        np.testing.assert_allclose(out, [0.0, 1.0, 0.3, 0.0, 0.5, 0.25], atol=1e-12)
+    def test_yaw_rotates_linear_only(self):
+        # Chassis +x lin -> world +y; body angular unchanged
+        tw = np.array([1.0, 0.0, 0.3, 0.5, -0.25, 0.1])
+        out = teleop_ee_twist_for_control(tw, np.pi / 2)
+        np.testing.assert_allclose(out, [0.0, 1.0, 0.3, 0.5, -0.25, 0.1], atol=1e-12)
+
+
+class TestTeleopEeTwistToWorld:
+    def test_identity_ee_matches_control_when_yaw_zero(self):
+        tw = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6])
+        np.testing.assert_allclose(
+            teleop_ee_twist_to_world(tw, 0.0, np.eye(3)), tw, atol=1e-12
+        )
+
+    def test_ee_rotation_maps_body_ang_to_world(self):
+        # Body ωx with R = yaw(pi/2) -> world ωy; linear still via base yaw=0
+        tw = np.array([0.0, 0.0, 0.0, 0.5, 0.0, 0.0])
+        R = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        out = teleop_ee_twist_to_world(tw, 0.0, R)
+        np.testing.assert_allclose(out, [0.0, 0.0, 0.0, 0.0, 0.5, 0.0], atol=1e-12)
+
+    def test_ang_independent_of_base_yaw(self):
+        # Same body ω and EE attitude -> same world ω regardless of base yaw
+        tw = np.array([0.0, 0.0, 0.0, 0.0, 0.4, 0.0])
+        R = np.eye(3)
+        out0 = teleop_ee_twist_to_world(tw, 0.0, R)
+        out90 = teleop_ee_twist_to_world(tw, np.pi / 2, R)
+        np.testing.assert_allclose(out0[3:], out90[3:], atol=1e-12)
+        np.testing.assert_allclose(out0[3:], [0.0, 0.4, 0.0], atol=1e-12)
 
 
 class TestAxesToEeVelocity:
@@ -128,6 +153,7 @@ class TestAxesToEeVelocity:
         buttons[11] = 1  # right yaw (d-pad right)
         max_vel = np.array([0.12, 0.12, 0.12, 0.25, 0.25, 0.25])
         out = axes_to_ee_velocity(axes, buttons, max_vel, [12, 11])
+        # Linear chassis; angular EE body (wx from stick, wy bumpers, wz buttons)
         np.testing.assert_allclose(out, [0.12, 0.06, 0.06, -0.125, 0.25, 0.25])
 
 

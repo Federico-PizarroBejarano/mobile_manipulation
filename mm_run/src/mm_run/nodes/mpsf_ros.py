@@ -15,10 +15,10 @@ from mm_utils.teleop_joy import (
     axes_to_base_velocity,
     axes_to_ee_velocity,
     chassis_base_twist_to_world,
-    chassis_ee_twist_to_world,
     gate_teleop_velocity,
     parse_teleop_config,
     store_joy_axes,
+    teleop_ee_twist_for_control,
     teleop_enable_held,
 )
 from mm_utils.teleop_session_logging import session_root
@@ -217,7 +217,9 @@ class MPSFControllerROSNode(ControllerROSNode):
                 yaw = float(q[2])
                 if self.teleop_control_mode == "ee":
                     desired_ee_vel = gate_teleop_velocity(
-                        chassis_ee_twist_to_world(self._joystick_to_ee_velocity(), yaw),
+                        teleop_ee_twist_for_control(
+                            self._joystick_to_ee_velocity(), yaw
+                        ),
                         True,
                     )
                     desired_velocity = {"ee_velocity": desired_ee_vel}

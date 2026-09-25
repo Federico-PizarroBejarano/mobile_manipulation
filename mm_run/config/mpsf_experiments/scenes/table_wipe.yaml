@@ -1,0 +1,108 @@
+# Table-wipe scene: two tables, same x-centerline, stacked in -y.
+# Table 1: 31" x 60". SW corner at (30", 0), then -5 cm in x and -4 cm in z,
+# then widened +0.5" on each side in x (30" -> 31").
+#   x in [0.6993, 1.4867] m, y in [-1.524, 0] m, 2 x 4 of 15" cylinders.
+# Table 2: 23.5" x 39.5", 35" high, flush with table 1's -y edge.
+#   x in [0.7946, 1.3915] m, y in [-2.5273, -1.524] m, 2 x 4 of 11.75" cylinders.
+
+cylinder:
+  # South column (x = 0.8898), west -> east (-y)
+  - name: "table_0_0"
+    radius: 0.1905
+    length: 0.758
+    xyz: [0.8898, -0.1905, 0.339]
+    rpy: [0, 0, 0]
+
+  - name: "table_0_1"
+    radius: 0.1905
+    length: 0.758
+    xyz: [0.8898, -0.5715, 0.339]
+    rpy: [0, 0, 0]
+
+  - name: "table_0_2"
+    radius: 0.1905
+    length: 0.758
+    xyz: [0.8898, -0.9525, 0.339]
+    rpy: [0, 0, 0]
+
+  - name: "table_0_3"
+    radius: 0.1905
+    length: 0.758
+    xyz: [0.8898, -1.3335, 0.339]
+    rpy: [0, 0, 0]
+
+  # North column (x = 1.2962), west -> east (-y)
+  - name: "table_1_0"
+    radius: 0.1905
+    length: 0.758
+    xyz: [1.2962, -0.1905, 0.339]
+    rpy: [0, 0, 0]
+
+  - name: "table_1_1"
+    radius: 0.1905
+    length: 0.758
+    xyz: [1.2962, -0.5715, 0.339]
+    rpy: [0, 0, 0]
+
+  - name: "table_1_2"
+    radius: 0.1905
+    length: 0.758
+    xyz: [1.2962, -0.9525, 0.339]
+    rpy: [0, 0, 0]
+
+  - name: "table_1_3"
+    radius: 0.1905
+    length: 0.758
+    xyz: [1.2962, -1.3335, 0.339]
+    rpy: [0, 0, 0]
+
+  # Table 2: 23.5" wide (x), 39.5" long (-y), 35" high.
+  # South column (x = 0.9438), west -> east (-y)
+  - name: "table2_0_0"
+    radius: 0.1492
+    length: 0.88
+    xyz: [0.9438, -1.6732, 0.44]
+    rpy: [0, 0, 0]
+
+  - name: "table2_0_1"
+    radius: 0.1492
+    length: 0.88
+    xyz: [0.9438, -1.9082, 0.44]
+    rpy: [0, 0, 0]
+
+  - name: "table2_0_2"
+    radius: 0.1492
+    length: 0.88
+    xyz: [0.9438, -2.1431, 0.44]
+    rpy: [0, 0, 0]
+
+  - name: "table2_0_3"
+    radius: 0.1492
+    length: 0.88
+    xyz: [0.9438, -2.3781, 0.44]
+    rpy: [0, 0, 0]
+
+  # North column (x = 1.2422), west -> east (-y)
+  - name: "table2_1_0"
+    radius: 0.1492
+    length: 0.88
+    xyz: [1.2422, -1.6732, 0.44]
+    rpy: [0, 0, 0]
+
+  - name: "table2_1_1"
+    radius: 0.1492
+    length: 0.88
+    xyz: [1.2422, -1.9082, 0.44]
+    rpy: [0, 0, 0]
+
+  - name: "table2_1_2"
+    radius: 0.1492
+    length: 0.88
+    xyz: [1.2422, -2.1431, 0.44]
+    rpy: [0, 0, 0]
+
+  - name: "table2_1_3"
+    radius: 0.1492
+    length: 0.88
+    xyz: [1.2422, -2.3781, 0.44]
+    rpy: [0, 0, 0]

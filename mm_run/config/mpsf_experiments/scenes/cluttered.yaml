@@ -22,14 +22,14 @@ cylinder:
 
   - name: "cylinder_3_1"
     radius: 0.22
-    length: 1.35
-    xyz: [-0.85, -2.50, 0.675]
+    length: 0.68
+    xyz: [-0.85, -2.50, 0.34]
     rpy: [0, 0, 0]
 
   - name: "cylinder_3_2"
     radius: 0.22
-    length: 1.35
-    xyz: [-0.65, -2.30, 0.675]
+    length: 0.68
+    xyz: [-0.65, -2.30, 0.34]
     rpy: [0, 0, 0]
 
 

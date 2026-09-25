@@ -1,0 +1,43 @@
+# Scene wiring for the table-wipe table (sim + controller).
+
+simulation:
+  static_obstacles:
+    enabled: True
+
+    urdf:
+      package: "mm_assets"
+      path: "scenes/urdf/static_obstacles.urdf"
+      includes:
+        - "$(find mm_assets)/scenes/xacro/static_obstacles.urdf.xacro"
+      args:
+        obstacle_params_file: "$(find mm_run)/config/mpsf_experiments/scenes/table_wipe.yaml"
+
+controller:
+  scene:
+    enabled: True
+    collision_link_names:
+      static_obstacles:
+        - "ground"
+        - "obstacle_table_0_0_link"
+        - "obstacle_table_0_1_link"
+        - "obstacle_table_0_2_link"
+        - "obstacle_table_0_3_link"
+        - "obstacle_table_1_0_link"
+        - "obstacle_table_1_1_link"
+        - "obstacle_table_1_2_link"
+        - "obstacle_table_1_3_link"
+        - "obstacle_table2_0_0_link"
+        - "obstacle_table2_0_1_link"
+        - "obstacle_table2_0_2_link"
+        - "obstacle_table2_0_3_link"
+        - "obstacle_table2_1_0_link"
+        - "obstacle_table2_1_1_link"
+        - "obstacle_table2_1_2_link"
+        - "obstacle_table2_1_3_link"
+    urdf:
+      package: "mm_assets"
+      path: "scenes/urdf/static_obstacles.urdf"
+      includes:
+        - "$(find mm_assets)/scenes/xacro/static_obstacles.urdf.xacro"
+      args:
+        obstacle_params_file: "$(find mm_run)/config/mpsf_experiments/scenes/table_wipe.yaml"

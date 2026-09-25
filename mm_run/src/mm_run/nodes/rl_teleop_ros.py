@@ -49,9 +49,9 @@ from mm_utils.teleop_joy import (
     FORCE_ZERO_LL_KP_PARAM,
     STICKS_ACTIVE_PARAM,
     axes_to_ee_velocity,
-    chassis_ee_twist_to_world,
     parse_teleop_config,
     store_joy_axes,
+    teleop_ee_twist_to_world,
     teleop_enable_held,
 )
 from mm_utils.teleop_session_logging import (
@@ -472,13 +472,14 @@ class RLTeleopROSNode:
 
         q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
         yaw = float(q[2])
-        desired_ee_cmd = chassis_ee_twist_to_world(
+        ee_pos, ee_orn = self.robot_mdl.getEE(q)
+        desired_ee_cmd = teleop_ee_twist_to_world(
             axes_to_ee_velocity(
                 axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
             ),
             yaw,
+            Rot.from_quat(ee_orn).as_matrix(),
         )
-        ee_pos, ee_orn = self.robot_mdl.getEE(q)
         motion = integrate_ee_motion(
             ee_pos,
             ee_orn,

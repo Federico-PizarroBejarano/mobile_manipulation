@@ -45,7 +45,7 @@ controller:
     static_obstacles: True
 
   collision_safety_margin:
-    self: 0.10
+    self: 0.05
     static_obstacles: 0.05   # target clearance [m]; soft RBF adds zeta planning buffer beyond this
 
   # mpc_ros E-stop: brake and shut down when a signed distance drops below this.

@@ -45,10 +45,10 @@ from mm_utils.teleop_joy import (
     axes_to_base_velocity,
     axes_to_ee_velocity,
     chassis_base_twist_to_world,
-    chassis_ee_twist_to_world,
     joint_velocity_command,
     parse_teleop_config,
     store_joy_axes,
+    teleop_ee_twist_for_control,
     teleop_enable_held,
 )
 from mm_utils.teleop_session_logging import (
@@ -376,7 +376,7 @@ class DirectTeleopROSNode:
                 buttons,
             )
 
-        desired_ee_vel = chassis_ee_twist_to_world(
+        desired_ee_vel = teleop_ee_twist_for_control(
             axes_to_ee_velocity(
                 axes, buttons, self.teleop_max_ee_vel, self.teleop_ee_yaw_buttons
             ),

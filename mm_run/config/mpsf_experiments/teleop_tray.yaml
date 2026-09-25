@@ -74,6 +74,9 @@ ik:
 
 simulation:
   duration: 60
+  robot:
+    # Tray-ready: measured arm joints where the gripped plank is level.
+    home: [-2.6, -1.25, 1.571, 1.57090235, -1.04724914, 2.09447575, -1.05401260, 1.57079864, 1.28475273]
 
 include:
   - package: "mm_run"

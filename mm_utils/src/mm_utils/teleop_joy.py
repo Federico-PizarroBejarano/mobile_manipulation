@@ -45,15 +45,28 @@ def chassis_base_twist_to_world(v_chassis, yaw):
     return body_twist_to_world(v_chassis, float(yaw))
 
 
-def chassis_ee_twist_to_world(twist_chassis, yaw):
-    """Map chassis-frame EE twist ``[vx, vy, vz, wx, wy, wz]`` to world frame.
+def teleop_ee_twist_for_control(twist_teleop, yaw):
+    """Map teleop EE twist to spatial-Jacobian / MPC ``EEVel`` convention.
 
-    Linear and angular 3-vectors are rotated by planar yaw; ``vz`` and ``wz``
-    are unchanged.
+    ``twist_teleop`` is ``[vx, vy, vz, wx, wy, wz]`` with linear velocity in the
+    chassis frame and angular velocity in the EE body frame. Returns world-frame
+    linear velocity and EE-body angular velocity (matching the tool spatial
+    Jacobian and MPC ``EEVel`` cost).
     """
-    tw = np.asarray(twist_chassis, dtype=float).reshape(6)
+    tw = np.asarray(twist_teleop, dtype=float).reshape(6)
     rot = _planar_yaw_rotation(float(yaw))
-    return np.concatenate([rot @ tw[:3], rot @ tw[3:]])
+    return np.concatenate([rot @ tw[:3], tw[3:]])
+
+
+def teleop_ee_twist_to_world(twist_teleop, yaw, R_ee_wb):
+    """Map teleop EE twist to a full world-frame twist.
+
+    Linear part is chassis→world via planar yaw. Angular part is EE-body→world
+    via ``R_ee_wb`` (body→world rotation, shape ``(3, 3)``).
+    """
+    tw = teleop_ee_twist_for_control(twist_teleop, yaw)
+    R = np.asarray(R_ee_wb, dtype=float).reshape(3, 3)
+    return np.concatenate([tw[:3], R @ tw[3:]])
 
 
 def ee_yaw_from_buttons(buttons, left_idx, right_idx):
@@ -100,10 +113,13 @@ def axes_to_base_velocity(joy_axes, max_base_vel):
 
 
 def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel, ee_yaw_buttons):
-    """Map joy axes + yaw buttons to chassis-frame EE twist.
+    """Map joy axes + yaw buttons to teleop EE twist.
 
-    Returns ``[vx, vy, vz, wx, wy, wz]`` in the chassis frame. Callers must
-    convert with :func:`chassis_ee_twist_to_world` before world-frame consumers.
+    Returns ``[vx, vy, vz, wx, wy, wz]`` with linear velocity in the chassis
+    frame and angular velocity in the EE body frame (right stick → body roll,
+    bumpers → body pitch, yaw buttons → body yaw). Callers must convert with
+    :func:`teleop_ee_twist_for_control` (MPC / spatial IK) or
+    :func:`teleop_ee_twist_to_world` (world-frame consumers).
     """
     joy_axes = np.asarray(joy_axes, dtype=float).reshape(-1)
     max_ee_vel = np.asarray(max_ee_vel, dtype=float).reshape(6)
