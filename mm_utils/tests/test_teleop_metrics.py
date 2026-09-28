@@ -75,6 +75,10 @@ def test_metrics_use_singular_teleop_filter_keys():
     assert "teleop_modes" not in c.metrics
     assert "teleop_enableds" not in c.metrics
 
+    c_rl = MPSFMetricsCollector()
+    update_collector(c_rl, np.zeros(9), teleop_mode="rl", teleop_enabled=True)
+    assert c_rl.metrics["teleop_mode"] == [2]
+
 
 def test_save_writes_npz_and_summary(tmp_path):
     c = MPSFMetricsCollector()

@@ -145,7 +145,9 @@ def run_mpsf_episode(
     success_orn_threshold = float(gcfg["success_orn_threshold"])
 
     robot.reset_joint_configuration(robot.home)
-    ee_pos, ee_orn = robot.link_pose()
+    robot_mdl = mpsf_runtime["robot_mdl"]
+    q0, _ = robot.joint_states(add_noise=False)
+    ee_pos, ee_orn = robot_mdl.getEE(q0)
     ee_planner = EEPlanner(
         goal_pos,
         goal_orn,
@@ -165,14 +167,15 @@ def run_mpsf_episode(
     episode_length = 0
     pos_err = 0.0
     orn_err = 0.0
-    tel = EpisodeTelemetry(robot)
+    tel = EpisodeTelemetry(robot, robot_mdl)
     for _step in range(max_episode_steps):
         robot_states = robot.joint_states(add_noise=False)
+        q_now = np.asarray(robot_states[0], dtype=float).reshape(-1)
         if planner_mode == "closed_loop":
-            ee_pos_now, ee_orn_now = robot.link_pose()
+            ee_pos_now, ee_orn_now = robot_mdl.getEE(q_now)
             desired_lin, desired_ang_w = ee_planner.step(ee_pos_now, ee_orn_now)
         else:
-            _, ee_orn_now = robot.link_pose()
+            _, ee_orn_now = robot_mdl.getEE(q_now)
             desired_lin, desired_ang_w = ee_planner.step()
         clamp = (ee_max_linear_vel, ee_max_angular_vel) if use_ik_solver else None
         desired_ee_vel_world, desired_ee_vel_mpc = (
@@ -215,7 +218,8 @@ def run_mpsf_episode(
         tel.accumulate_step(robot, goal_pos=goal_pos, goal_orn=goal_orn)
 
         episode_length = _step + 1
-        ee_pos_f, ee_orn_f = robot.link_pose()
+        q_f, _ = robot.joint_states(add_noise=False)
+        ee_pos_f, ee_orn_f = robot_mdl.getEE(q_f)
         pos_err = float(np.linalg.norm(ee_pos_f - goal_pos))
         orn_err = float(mm_math.quat_orientation_error(ee_orn_f, goal_orn))
         if pos_err <= success_pos_threshold and orn_err <= success_orn_threshold:
@@ -306,7 +310,7 @@ def evaluate_episode(env, agent, episode_num, reset_options=None):
     episode_reward = 0
     episode_length = 0
     done = False
-    tel = EpisodeTelemetry(env.sim.robot)
+    tel = EpisodeTelemetry(env.sim.robot, env.robot_mdl)
 
     print(f"\nEpisode {episode_num}:")
     print(f"  Goal position: {info['goal_pos']}")
@@ -341,8 +345,8 @@ def evaluate_episode(env, agent, episode_num, reset_options=None):
     pos_error = np.linalg.norm(ee_pos - env.goal_pos)
     orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
     success = (
-        pos_error <= env.success_pos_threshold
-        and orn_error <= env.success_orn_threshold
+        pos_error <= env.eval_success_pos_threshold
+        and orn_error <= env.eval_success_orn_threshold
     )
 
     print("  Episode completed:")
@@ -385,7 +389,8 @@ def main():
 
     max_steps = int(config["simulation"]["max_episode_steps"])
     # Evaluation always runs full horizon; no early termination.
-    rl_reset_extras = {"disable_early_termination": True}
+    # Official 10 cm / 0.05 box (not the tighter train terminate).
+    rl_reset_extras = {"disable_early_termination": True, "eval_success": True}
 
     ensure_controller_config(config)
     config["planner_mode"] = "closed_loop" if args.closed_loop_planner else "open_loop"

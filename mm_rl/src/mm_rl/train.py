@@ -53,10 +53,12 @@ def evaluate(env, agent, n_episodes=5):
     """
     episode_rewards = []
     episode_lengths = []
+    pos_errors = []
+    orn_errors = []
     success_count = 0
 
     for _ in range(n_episodes):
-        obs, _ = env.reset()
+        obs, _ = env.reset(options={"eval_success": True})
         episode_reward = 0
         episode_length = 0
         done = False
@@ -69,26 +71,30 @@ def evaluate(env, agent, n_episodes=5):
             episode_length += 1
             done = terminated or truncated
 
-        # Check if goal was actually reached (not just early termination)
+        # Official 10 cm / 0.05 box (not the tighter train terminate)
         ee_pos, ee_orn = env._ee_pose_w()
         pos_error = np.linalg.norm(ee_pos - env.goal_pos)
         orn_error = mm_math.quat_orientation_error(ee_orn, env.goal_orn)
         success = (
             terminated
-            and pos_error <= env.success_pos_threshold
-            and orn_error <= env.success_orn_threshold
+            and pos_error <= env.eval_success_pos_threshold
+            and orn_error <= env.eval_success_orn_threshold
         )
         if success:
             success_count += 1
 
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
+        pos_errors.append(pos_error)
+        orn_errors.append(orn_error)
 
     return {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
         "mean_length": np.mean(episode_lengths),
         "success_rate": success_count / n_episodes,
+        "mean_pos_error": np.mean(pos_errors),
+        "mean_orn_error": np.mean(orn_errors),
     }
 
 
@@ -166,6 +172,7 @@ def train():
     # Metrics tracking
     episode_rewards = []
     training_metrics = []
+    eval_metrics = []
 
     print("Starting training...")
     print(f"Max steps: {max_steps}")
@@ -232,6 +239,7 @@ def train():
             print(f"\nEvaluating at step {total_steps}...")
             env.set_training_step(total_steps)
             eval_results = evaluate(env, agent, n_episodes=eval_episodes)
+            eval_metrics.append({**eval_results, "step": total_steps})
             print(
                 f"Eval - Mean reward: {eval_results['mean_reward']:.2f}, "
                 f"Success rate: {eval_results['success_rate']:.2%} "
@@ -250,6 +258,7 @@ def train():
     print("\nFinal evaluation...")
     env.set_training_step(max_steps)
     final_eval = evaluate(env, agent, n_episodes=final_eval_episodes)
+    eval_metrics.append({**final_eval, "step": total_steps})
     print(
         f"Final Eval - Mean reward: {final_eval['mean_reward']:.2f}, "
         f"Success rate: {final_eval['success_rate']:.2%} "
@@ -262,12 +271,25 @@ def train():
     print(f"Saved final model to {final_checkpoint}")
 
     # Save training metrics
-    if training_metrics:
+    if training_metrics or eval_metrics:
         metrics_path = log_dir / "training_metrics.npz"
-        # Convert to numpy arrays for saving
         metrics_dict = {}
-        for key in training_metrics[0].keys():
-            metrics_dict[key] = [m[key] for m in training_metrics]
+        if training_metrics:
+            for key in training_metrics[0].keys():
+                metrics_dict[key] = [m[key] for m in training_metrics]
+        if eval_metrics:
+            metrics_dict["eval_step"] = [m["step"] for m in eval_metrics]
+            metrics_dict["eval_success_rate"] = [
+                m["success_rate"] for m in eval_metrics
+            ]
+            metrics_dict["eval_mean_reward"] = [m["mean_reward"] for m in eval_metrics]
+            metrics_dict["eval_mean_length"] = [m["mean_length"] for m in eval_metrics]
+            metrics_dict["eval_mean_pos_error"] = [
+                m["mean_pos_error"] for m in eval_metrics
+            ]
+            metrics_dict["eval_mean_orn_error"] = [
+                m["mean_orn_error"] for m in eval_metrics
+            ]
         np.savez(str(metrics_path), **metrics_dict)
         print(f"Saved training metrics to {metrics_path}")
 

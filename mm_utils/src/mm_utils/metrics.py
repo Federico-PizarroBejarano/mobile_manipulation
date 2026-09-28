@@ -10,6 +10,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 
 from mm_utils.math import wrap_pi_scalar
+from mm_utils.teleop_session_logging import mode_to_int
 
 
 def compute_jerkiness(velocities, dt):
@@ -377,9 +378,7 @@ class MPSFMetricsCollector:
 
         mode = teleop_mode or ""
         enabled = bool(teleop_enabled) if teleop_enabled is not None else False
-        self.metrics["teleop_mode"].append(
-            0 if mode == "base" else 1 if mode == "ee" else -1
-        )
+        self.metrics["teleop_mode"].append(mode_to_int(mode))
         self.metrics["teleop_enabled"].append(1.0 if enabled else 0.0)
 
         # RMSE

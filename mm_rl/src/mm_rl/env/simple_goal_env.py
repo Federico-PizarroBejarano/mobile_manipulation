@@ -32,9 +32,26 @@ class SimpleGoalEnv(BaseRLEnv):
         # Active sampling range (updated by set_training_step during curriculum)
         self.goal_orn_range = self.goal_orn_range_start
 
-        # Success thresholds
-        self.success_pos_threshold = self.goal_config.get("success_pos_threshold")
-        self.success_orn_threshold = self.goal_config.get("success_orn_threshold")
+        # Eval / report box (official 10 cm / 0.05). Train box is tighter.
+        self.eval_success_pos_threshold = float(
+            self.goal_config.get("success_pos_threshold", 0.1)
+        )
+        self.eval_success_orn_threshold = float(
+            self.goal_config.get("success_orn_threshold", 0.05)
+        )
+        self.train_success_pos_threshold = float(
+            self.goal_config.get(
+                "train_success_pos_threshold", self.eval_success_pos_threshold
+            )
+        )
+        self.train_success_orn_threshold = float(
+            self.goal_config.get(
+                "train_success_orn_threshold", self.eval_success_orn_threshold
+            )
+        )
+        # Active terminate gates (switched by reset ``eval_success``)
+        self.success_pos_threshold = self.train_success_pos_threshold
+        self.success_orn_threshold = self.train_success_orn_threshold
 
         # Reward parameters (IK uses modulation_rl-style pos_scale/rot_scale normalization)
         self.reward_config = config.get("reward")
@@ -47,7 +64,6 @@ class SimpleGoalEnv(BaseRLEnv):
         self.base_action_penalty_multiplier = self.reward_config.get(
             "base_action_penalty_multiplier", 0.0
         )
-        self.success_bonus = float(self.reward_config.get("success_bonus", 0.0))
 
         # Initialize goal
         self.goal_pos = None
@@ -78,13 +94,20 @@ class SimpleGoalEnv(BaseRLEnv):
             seed (int, optional): Forwarded to the parent reset for RNG.
             options (dict, optional): May set ``goal_pos`` and ``goal_orn`` together to
                 skip random goal sampling; ``disable_early_termination`` is forwarded to
-                :meth:`BaseRLEnv.reset`.
+                :meth:`BaseRLEnv.reset`; ``eval_success`` (bool) uses the eval box
+                for goal termination instead of the train box.
 
         Returns:
             tuple: ``(observation, info)`` with ``info`` also containing ``goal_pos`` and
             ``goal_orn`` copies.
         """
         options = options or {}
+        if bool(options.get("eval_success", False)):
+            self.success_pos_threshold = self.eval_success_pos_threshold
+            self.success_orn_threshold = self.eval_success_orn_threshold
+        else:
+            self.success_pos_threshold = self.train_success_pos_threshold
+            self.success_orn_threshold = self.train_success_orn_threshold
         if "goal_pos" in options and "goal_orn" in options:
             self.goal_pos = np.asarray(options["goal_pos"], dtype=np.float64).reshape(3)
             self.goal_orn = np.asarray(options["goal_orn"], dtype=np.float64).reshape(4)
@@ -168,45 +191,27 @@ class SimpleGoalEnv(BaseRLEnv):
             base_action_penalty_multiplier=self.base_action_penalty_multiplier,
         )
 
-        # Sparse success bonus on the step that reaches the goal (episode then ends)
-        if self.success_bonus != 0.0:
-            pos_error = np.linalg.norm(ee_pos_w - self.goal_pos)
-            orn_error = mm_math.quat_orientation_error(ee_orn_w, self.goal_orn)
-            if (
-                pos_error <= self.success_pos_threshold
-                and orn_error <= self.success_orn_threshold
-            ):
-                reward += self.success_bonus
-
         return reward
+
+    def _at_goal(self, pos_thr, orn_thr):
+        """True if the current EE pose is inside the given position/orientation box."""
+        q, _ = self.sim.robot.joint_states()
+        ee_pos_w, ee_orn_w = self._ee_pose_w(q)
+        pos_error = np.linalg.norm(ee_pos_w - self.goal_pos)
+        orn_error = mm_math.quat_orientation_error(ee_orn_w, self.goal_orn)
+        return pos_error <= pos_thr and orn_error <= orn_thr
 
     def _check_termination(self):
         """Check if episode should terminate.
 
         Checks for:
         1. Early termination: deviation from desired pose (checked by parent)
-        2. Goal reached: current pose within success thresholds
+        2. Goal reached: current pose within the active success box
+           (train by default; eval when reset with ``eval_success``)
 
         Returns:
             bool: True if episode should terminate
         """
-        # First check for early termination (deviation-based)
         if super()._check_termination():
             return True
-
-        # Then check if goal is reached
-        q, _ = self.sim.robot.joint_states()
-        ee_pos_w, ee_orn_w = self._ee_pose_w(q)
-
-        # Check position distance
-        pos_error = np.linalg.norm(ee_pos_w - self.goal_pos)
-        if pos_error > self.success_pos_threshold:
-            return False
-
-        # Check orientation distance
-        orn_error = mm_math.quat_orientation_error(ee_orn_w, self.goal_orn)
-        if orn_error > self.success_orn_threshold:
-            return False
-
-        # Goal reached!
-        return True
+        return self._at_goal(self.success_pos_threshold, self.success_orn_threshold)

@@ -9,17 +9,25 @@ from mm_utils import math as mm_math
 from mm_utils.metrics import compute_jerkiness
 
 
+def _base_xy(q):
+    """Planar base position from joint configuration ``q[:2]``."""
+    q = np.asarray(q, dtype=np.float64).reshape(-1)
+    return np.array([q[0], q[1], 0.0], dtype=np.float64)
+
+
 class EpisodeTelemetry:
     """Accumulate per-step traces and scalar metrics for one rollout."""
 
-    def __init__(self, robot):
+    def __init__(self, robot, robot_mdl):
         """Initialize traces from current base pose.
 
         Args:
-            robot: Robot object with ``joint_states()`` and ``link_pose(link_idx=-1)``.
+            robot: Robot object with ``joint_states()``.
+            robot_mdl: Casadi model with ``getEE(q)`` (same FK as training / hardware).
         """
-        base_pos, _ = robot.link_pose(link_idx=-1)
-        self._base_pos_prev = np.asarray(base_pos, dtype=np.float64).copy()
+        self.robot_mdl = robot_mdl
+        q, _ = robot.joint_states(add_noise=False)
+        self._base_pos_prev = _base_xy(q)
         self._prev_dq = None
         self.base_effort = 0.0
         self.arm_effort = 0.0
@@ -43,7 +51,8 @@ class EpisodeTelemetry:
             goal_orn (ndarray, optional): Goal quaternion (xyzs) for error traces.
             reward (float, optional): RL reward for this step.
         """
-        _, dq = robot.joint_states(add_noise=False)
+        q, dq = robot.joint_states(add_noise=False)
+        q = np.asarray(q, dtype=np.float64).reshape(-1)
         dq = np.asarray(dq, dtype=np.float64)
         base_u, arm_u = dq[:3], dq[3:]
         self.base_cmd_trace.append(base_u.copy())
@@ -58,14 +67,13 @@ class EpisodeTelemetry:
             self.arm_smoothness += float(np.dot(d_arm, d_arm))
         self._prev_dq = dq.copy()
 
-        base_now, _ = robot.link_pose(link_idx=-1)
-        b = np.asarray(base_now, dtype=np.float64)
+        b = _base_xy(q)
         self.base_path_length += float(np.linalg.norm(b - self._base_pos_prev))
         self._base_pos_prev = b.copy()
         self.base_pos_trace.append(b.copy())
 
         if goal_pos is not None and goal_orn is not None:
-            ee_pos, ee_orn = robot.link_pose()
+            ee_pos, ee_orn = self.robot_mdl.getEE(q)
             self.pos_error_trace.append(
                 float(np.linalg.norm(np.asarray(ee_pos) - np.asarray(goal_pos)))
             )

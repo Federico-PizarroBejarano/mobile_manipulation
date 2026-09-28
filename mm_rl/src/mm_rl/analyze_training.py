@@ -63,9 +63,10 @@ def plot_metrics(metrics, output_dir=None):
         return
 
     steps = metrics["step"]
+    eval_steps = metrics.get("eval_step")
 
     # Determine number of subplots needed
-    metric_keys = [k for k in metrics.keys() if k != "step"]
+    metric_keys = [k for k in metrics.keys() if k not in ("step", "eval_step")]
     n_metrics = len(metric_keys)
 
     if n_metrics == 0:
@@ -84,16 +85,20 @@ def plot_metrics(metrics, output_dir=None):
     for idx, key in enumerate(metric_keys):
         ax = axes[idx]
         values = metrics[key]
+        x = eval_steps if key.startswith("eval_") and eval_steps is not None else steps
+        if len(x) != len(values):
+            ax.set_title(f"{key} (length mismatch, skipped)")
+            continue
 
         # Plot raw values
-        ax.plot(steps, values, alpha=0.6, linewidth=0.5, label=key)
+        ax.plot(x, values, alpha=0.6, linewidth=0.5, label=key)
 
         # Add moving average
         if len(values) > 100:
             window = min(100, len(values) // 10)
             moving_avg = np.convolve(values, np.ones(window) / window, mode="valid")
-            moving_steps = steps[window - 1 :]
-            ax.plot(moving_steps, moving_avg, linewidth=2, label=f"{key} (MA)")
+            moving_x = x[window - 1 :]
+            ax.plot(moving_x, moving_avg, linewidth=2, label=f"{key} (MA)")
 
         ax.set_xlabel("Training Step")
         ax.set_ylabel(key)

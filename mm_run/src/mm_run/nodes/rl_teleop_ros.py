@@ -64,6 +64,30 @@ from mm_utils.teleop_session_logging import (
 )
 
 
+def _goal_velocity_limits(ctrl_config, robot_overrides):
+    """MPC ``goal_velocity`` caps, with ``robot.*_vel_limit`` as fallback."""
+    gv = (ctrl_config.get("mpsf_params") or {}).get("goal_velocity") or {}
+    max_base = gv.get("max_base_vel")
+    if max_base is not None:
+        mb = np.asarray(max_base, dtype=float).reshape(-1)
+        base_low = np.array([-mb[0], -mb[1], -mb[2]], dtype=float)
+        base_high = np.array([mb[0], mb[1], mb[2]], dtype=float)
+    else:
+        base_lin = float(robot_overrides.get("base_linear_vel_limit", 0.3))
+        base_ang = float(robot_overrides.get("base_angular_vel_limit", 0.3))
+        base_low = np.array([-base_lin, -base_lin, -base_ang], dtype=float)
+        base_high = np.array([base_lin, base_lin, base_ang], dtype=float)
+    max_ee = gv.get("max_ee_vel")
+    if max_ee is not None:
+        me = np.asarray(max_ee, dtype=float).reshape(-1)
+        ee_lin = float(np.max(np.abs(me[:3])))
+        ee_ang = float(np.max(np.abs(me[3:6])))
+    else:
+        ee_lin = float(robot_overrides.get("ee_linear_vel_limit", 0.15))
+        ee_ang = float(robot_overrides.get("ee_angular_vel_limit", 0.3))
+    return base_low, base_high, ee_lin, ee_ang
+
+
 def _base_pose_from_q(q):
     q = np.asarray(q, dtype=float).reshape(-1)
     yaw = float(q[2])
@@ -182,10 +206,12 @@ class RLTeleopROSNode:
         self.dt = 1.0 / self.rate_hz
 
         robot_overrides = config.get("robot", {})
-        base_lin = float(robot_overrides.get("base_linear_vel_limit", 0.3))
-        base_ang = float(robot_overrides.get("base_angular_vel_limit", 0.3))
-        self.base_input_low = np.array([-base_lin, -base_lin, -base_ang], dtype=float)
-        self.base_input_high = np.array([base_lin, base_lin, base_ang], dtype=float)
+        (
+            self.base_input_low,
+            self.base_input_high,
+            ee_lin_lim,
+            ee_ang_lim,
+        ) = _goal_velocity_limits(self.ctrl_config, robot_overrides)
 
         # MoMa EE-integrator look-ahead (deploy only; training uses final goal in obs)
         self.obs_horizon_m = float(config.get("goal", {}).get("obs_horizon_m", 1.5))
@@ -222,16 +248,8 @@ class RLTeleopROSNode:
 
         self.robot_mdl = MobileManipulator3D(self.ctrl_config)
         self.ik_params = build_ik_params_from_config(config, self.nu, self.dof)
-        self.ik_params["ee_max_linear_vel"] = float(
-            robot_overrides.get(
-                "ee_linear_vel_limit", self.ik_params["ee_max_linear_vel"]
-            )
-        )
-        self.ik_params["ee_max_angular_vel"] = float(
-            robot_overrides.get(
-                "ee_angular_vel_limit", self.ik_params["ee_max_angular_vel"]
-            )
-        )
+        self.ik_params["ee_max_linear_vel"] = ee_lin_lim
+        self.ik_params["ee_max_angular_vel"] = ee_ang_lim
 
         # SAC policy
         rl_cfg = config.get("rl", {})
@@ -332,13 +350,25 @@ class RLTeleopROSNode:
     def _save_results(self):
         if self._saved:
             return
-        self._saved = True
+        self.bag_recorder.stop()
+        metrics_dir = (
+            session_root(self.logger.base_directory, self.session_timestamp) / "metrics"
+        )
+        metrics_saved = False
+        logger_saved = False
         try:
-            self.bag_recorder.stop()
+            self.metrics_collector.save(metrics_dir)
+            self.metrics_collector.print_summary()
+            metrics_saved = True
+        except Exception as exc:
+            rospy.logerr("Failed to save RL teleop metrics: %s", exc)
+        try:
             self.logger.save(session_timestamp=self.session_timestamp)
+            logger_saved = True
             clear_experiment_timestamp()
         except Exception as exc:
-            rospy.logwarn("RL teleop save failed: %s", exc)
+            rospy.logerr("Failed to save RL teleop control log: %s", exc)
+        self._saved = metrics_saved and logger_saved
 
     def _sync_session_timestamp(self):
         self.session_timestamp = resolve_experiment_timestamp(create=False) or (
@@ -526,6 +556,8 @@ class RLTeleopROSNode:
         v_cmd = solve_diff_ik(
             J, twist_ik, base_vel=desired_base_vel, ik_params=self.ik_params
         )
+        v_cmd = np.asarray(v_cmd, dtype=float).reshape(self.nu)
+        v_cmd[:3] = np.clip(v_cmd[:3], self.base_input_low, self.base_input_high)
         return v_cmd, enabled, desired_base_vel, desired_ee_cmd, axes, buttons
 
     def _record_cycle(

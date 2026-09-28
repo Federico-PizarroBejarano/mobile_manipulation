@@ -134,13 +134,12 @@ def test_ee_planner_with_mpsf(
     ctrl_period = 1.0 / ctrl_config.get("ctrl_rate", 10.0)
 
     ik_params = None
-    robot_mdl = None
     if use_ik_solver:
         ik_params = build_ik_params_from_config(config, nu, nq)
-        ctrl_for_mdl = dict(ctrl_config)
-        if "dt" not in ctrl_for_mdl:
-            ctrl_for_mdl["dt"] = float(sim_config["timestep"])
-        robot_mdl = MobileManipulator3D(ctrl_for_mdl)
+    ctrl_for_mdl = dict(ctrl_config)
+    if "dt" not in ctrl_for_mdl:
+        ctrl_for_mdl["dt"] = float(sim_config["timestep"])
+    robot_mdl = MobileManipulator3D(ctrl_for_mdl)
 
     # --- Episode parameters (from config) ---
     goal_cfg = config.get("goal", {})
@@ -177,7 +176,8 @@ def test_ee_planner_with_mpsf(
         robot.reset_joint_configuration(robot.home)
 
         # Get initial EE pose for goal generation
-        ee_pos, ee_orn = robot.link_pose()
+        q0, _ = robot.joint_states(add_noise=False)
+        ee_pos, ee_orn = robot_mdl.getEE(q0)
 
         # Generate feasible goal
         goal_pos, goal_orn, goal_distance = _generate_feasible_goal(
@@ -225,11 +225,12 @@ def test_ee_planner_with_mpsf(
             robot_states = robot.joint_states(add_noise=False)
 
             # Desired EE vel from planner (updated every step)
+            q_now = np.asarray(robot_states[0], dtype=float).reshape(-1)
             if planner_mode == "closed_loop":
-                ee_pos_now, ee_orn_now = robot.link_pose()
+                ee_pos_now, ee_orn_now = robot_mdl.getEE(q_now)
                 desired_lin_vel, desired_ang_w = ee_planner.step(ee_pos_now, ee_orn_now)
             else:
-                _, ee_orn_now = robot.link_pose()
+                _, ee_orn_now = robot_mdl.getEE(q_now)
                 desired_lin_vel, desired_ang_w = ee_planner.step()
             clamp = (ee_max_linear_vel, ee_max_angular_vel) if use_ik_solver else None
             desired_ee_vel_world, desired_ee_vel_mpc = (
@@ -278,7 +279,8 @@ def test_ee_planner_with_mpsf(
             t, _ = sim.step(t)
 
             # Measure tracking error
-            actual_ee_pos, actual_ee_orn = robot.link_pose()
+            q_after, _ = robot.joint_states(add_noise=False)
+            actual_ee_pos, actual_ee_orn = robot_mdl.getEE(q_after)
             desired_ee_pos, desired_ee_orn = ee_planner.get_desired_pose()
 
             pos_error = np.linalg.norm(actual_ee_pos - desired_ee_pos)
@@ -342,7 +344,8 @@ def test_ee_planner_with_mpsf(
             tracking_good_count += 1
 
         # Final goal error
-        final_ee_pos, final_ee_orn = robot.link_pose()
+        q_f, _ = robot.joint_states(add_noise=False)
+        final_ee_pos, final_ee_orn = robot_mdl.getEE(q_f)
         final_pos_error = np.linalg.norm(final_ee_pos - goal_pos)
         final_orn_error = mm_math.quat_orientation_error(final_ee_orn, goal_orn)
         goal_reached = (

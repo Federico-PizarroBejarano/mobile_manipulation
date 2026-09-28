@@ -1,13 +1,13 @@
 # RL Training Configuration (N²M² paper-aligned where noted)
 
 rl:
-  max_steps: 500000  # Total training steps (paper: 10e6)
+  max_steps: 2000000  # Total training steps (paper: 10e6)
   start_steps: 10000  # Random actions before training starts
   update_after: 1000  # Start updating networks after N steps
   update_freq: 1  # Update networks every N steps
-  eval_freq: 20000  # Frequency of evaluation episodes
-  eval_episodes: 10  # Episodes per mid-training eval
-  final_eval_episodes: 25
+  eval_freq: 50000  # Frequency of evaluation episodes
+  eval_episodes: 25  # Episodes per mid-training eval
+  final_eval_episodes: 100
   save_freq: 50000  # Frequency of checkpoint saving
 
   sac:
@@ -30,17 +30,18 @@ goal:
   orn_range: 3.14  # Final orientation range (rad) after curriculum
   orn_range_start: 0.0  # Start of orientation curriculum
   orn_curriculum_steps: 250000  # Linear ramp start→orn_range over this many env steps
-  success_pos_threshold: 0.1  # Position success threshold in meters
-  success_orn_threshold: 0.05  # Orientation success threshold (quaternion distance)
+  success_pos_threshold: 0.1  # Eval / report box (m)
+  success_orn_threshold: 0.05  # Eval / report box (quaternion distance)
+  train_success_pos_threshold: 0.07  # Tighter train terminate + bonus (m)
+  train_success_orn_threshold: 0.04
 
 # Reward parameters (IK: modulation_rl-style normalized L2, -0.5 when at pos_scale/rot_scale)
 reward:
-  ik_penalty_multiplier: 1.0  # Multiplier for IK reward (λ_ik)
+  ik_penalty_multiplier: 0.8  # Multiplier for IK reward (λ_ik)
   pos_scale: 0.1   # Position normalization (m), same as modulation_rl ikslack_dist
   rot_scale: 0.05  # Rotation normalization, same as modulation_rl ikslack_rot_dist
-  acceleration_penalty_multiplier: 0.02  # Softer settle / smoothness cost
-  base_action_penalty_multiplier: 0.02
-  success_bonus: 10.0  # Sparse bonus on the step that reaches the goal
+  acceleration_penalty_multiplier: 0.05  # Stronger settle / smoothness cost
+  base_action_penalty_multiplier: 0.05
 
 # Simulation parameters (can be overridden by including simulation config)
 simulation:
@@ -67,7 +68,7 @@ termination:
 
 # IK solver parameters (N²M² paper: minimum displacement regularization weighted by max velocities)
 ik:
-  regularization_strength: 0.05  # Regularization strength (λ) for minimum displacement goal
+  regularization_strength: 0.08  # Regularization strength (λ) for minimum displacement goal
   use_weighted_regularization: true  # Use weighted regularization (1/max_vel) instead of uniform damping
 
 # Planner slower than EE clamp for tracking headroom; teleop authority unchanged
