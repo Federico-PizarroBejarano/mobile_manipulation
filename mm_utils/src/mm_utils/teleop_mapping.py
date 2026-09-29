@@ -6,9 +6,9 @@ Human-readable roles: mm_run/config/teleop/README.md
 HARDWARE_DEADMAN_AXIS = 2
 ENABLE_TRIGGER_AXIS = 4
 ENABLE_TRIGGER_THRESHOLD = 0.5
-EE_PITCH_AXIS = 2
+EE_YAW_AXIS = 2
 EE_ROLL_BUTTONS = (12, 11)
-EE_YAW_BUTTONS = (13, 14)
+EE_PITCH_BUTTONS = (13, 14)
 
 
 def hardware_deadman_held(raw_axes):

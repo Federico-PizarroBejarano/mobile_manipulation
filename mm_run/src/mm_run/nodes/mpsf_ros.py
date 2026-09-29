@@ -10,6 +10,7 @@ from sensor_msgs.msg import Joy
 from mm_run.nodes.mpc_ros import ControllerROSNode
 from mm_run.scripts.mpsf_experiment import calculate_desired_velocity
 from mm_utils.metrics import MPSFMetricsCollector  # noqa: E402
+from mm_utils.path_coverage import apply_path_coverage_to_metrics
 from mm_utils.teleop_joy import (
     STICKS_ACTIVE_PARAM,
     axes_to_base_velocity,
@@ -185,9 +186,11 @@ class MPSFControllerROSNode(ControllerROSNode):
                 q = np.asarray(robot_states[0], dtype=float).reshape(-1)
                 yaw = float(q[2])
                 if self.teleop_control_mode == "ee":
+                    _, ee_quat = self.controller.robot.getEE(q)
+                    R_ee = Rot.from_quat(ee_quat).as_matrix()
                     desired_ee_vel = gate_teleop_velocity(
                         teleop_ee_twist_for_control(
-                            self._joystick_to_ee_velocity(), yaw
+                            self._joystick_to_ee_velocity(), yaw, R_ee
                         ),
                         True,
                     )
@@ -301,15 +304,35 @@ class MPSFControllerROSNode(ControllerROSNode):
     def _save_metrics(self):
         if self._metrics_saved:
             return
-        metrics_dir = (
-            session_root(self.logger.base_directory, self.session_timestamp) / "metrics"
-        )
+        root = session_root(self.logger.base_directory, self.session_timestamp)
+        # Square end returns from run() before rospy shutdown; flush control/data.npz
+        # here so path_coverage (and offline recalc) see the same session as metrics.
         try:
-            self.metrics_collector.save(metrics_dir)
+            self.logger.save(session_timestamp=self.session_timestamp)
+        except Exception as exc:
+            rospy.logerr("Failed to save MPSF control log: %s", exc)
+        try:
+            self.metrics_collector.save(root / "metrics")
             self.metrics_collector.print_summary()
             self._metrics_saved = True
         except Exception as exc:
             rospy.logerr("Failed to save MPSF metrics: %s", exc)
+            return
+        logging_cfg = getattr(self.logger, "config", None) or {}
+        pcfg = logging_cfg.get("logging", {}).get("path_coverage")
+        if isinstance(pcfg, dict):
+            try:
+                cov = apply_path_coverage_to_metrics(root, pcfg)
+                if cov is None:
+                    rospy.logwarn(
+                        "path_coverage skipped: missing control/data.npz or ee_pose"
+                    )
+                else:
+                    rospy.loginfo("Path coverage: %.1f%%", 100.0 * cov)
+            except ValueError as exc:
+                rospy.logerr("path_coverage: %s", exc)
+            except Exception as exc:
+                rospy.logerr("Failed to apply path_coverage: %s", exc)
 
 
 if __name__ == "__main__":

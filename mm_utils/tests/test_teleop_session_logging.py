@@ -7,12 +7,15 @@ from mm_utils.logging import DataLogger
 from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     append_teleop_sample,
+    apply_trial_metadata,
     build_curated_bag_topics,
     build_rosbag_record_cmd,
     clear_experiment_timestamp,
     commanded_ee_twist,
     format_session_timestamp,
+    maybe_prompt_trial_metadata,
     pad_joy_buttons,
+    prompt_trial_metadata,
     resolve_experiment_timestamp,
     session_root,
     vicon_object_topic,
@@ -283,3 +286,75 @@ def test_trial_bag_recorder_popen_failure_sets_error(tmp_path):
     rec.start()
     assert rec.last_error is not None
     assert rec.bag_path is None
+
+
+def test_apply_trial_metadata(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    apply_trial_metadata(logger, "  alice  ", 3)
+    assert logger.data["user"] == "alice"
+    assert logger.data["trial"] == 3
+    assert logger.config["logging"]["trial_metadata"] == {
+        "user": "alice",
+        "trial": 3,
+    }
+
+
+def test_prompt_trial_metadata_reprompts_invalid():
+    answers = iter(["", "  bob ", "0", "x", "2"])
+    user, trial = prompt_trial_metadata(input_fn=lambda _prompt: next(answers))
+    assert user == "bob"
+    assert trial == 2
+
+
+def test_maybe_prompt_skips_when_disabled(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    result = maybe_prompt_trial_metadata(
+        logger,
+        input_fn=lambda _p: (_ for _ in ()).throw(AssertionError("should not prompt")),
+        isatty_fn=lambda: True,
+    )
+    assert result is None
+    assert "user" not in logger.data
+    assert "trial_metadata" not in logger.config["logging"]
+
+
+def test_maybe_prompt_skips_when_not_tty(tmp_path):
+    cfg = {
+        "logging": {
+            "log_dir": str(tmp_path),
+            "prompt_trial_metadata": True,
+        }
+    }
+    logger = DataLogger(cfg, name="control")
+    result = maybe_prompt_trial_metadata(
+        logger,
+        input_fn=lambda _p: (_ for _ in ()).throw(AssertionError("should not prompt")),
+        isatty_fn=lambda: False,
+    )
+    assert result is None
+    assert "user" not in logger.data
+
+
+def test_maybe_prompt_records_when_enabled(tmp_path):
+    cfg = {
+        "logging": {
+            "log_dir": str(tmp_path),
+            "prompt_trial_metadata": True,
+        }
+    }
+    logger = DataLogger(cfg, name="control")
+    answers = iter(["carol", "7"])
+    result = maybe_prompt_trial_metadata(
+        logger,
+        input_fn=lambda _p: next(answers),
+        isatty_fn=lambda: True,
+    )
+    assert result == {"user": "carol", "trial": 7}
+    assert logger.data["user"] == "carol"
+    assert logger.data["trial"] == 7
+    assert logger.config["logging"]["trial_metadata"] == {
+        "user": "carol",
+        "trial": 7,
+    }

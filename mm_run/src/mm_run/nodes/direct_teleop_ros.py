@@ -33,6 +33,7 @@ from mm_utils.diff_ik import (
 )
 from mm_utils.logging import DataLogger
 from mm_utils.metrics import MPSFMetricsCollector
+from mm_utils.path_coverage import apply_path_coverage_to_metrics
 from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
@@ -56,6 +57,7 @@ from mm_utils.teleop_session_logging import (
     append_teleop_sample,
     clear_experiment_timestamp,
     commanded_ee_twist,
+    maybe_prompt_trial_metadata,
     resolve_experiment_timestamp,
     session_root,
 )
@@ -207,22 +209,34 @@ class DirectTeleopROSNode:
         if self._saved:
             return
         self.bag_recorder.stop()
-        metrics_dir = (
-            session_root(self.logger.base_directory, self.session_timestamp) / "metrics"
-        )
+        root = session_root(self.logger.base_directory, self.session_timestamp)
         metrics_saved = False
         logger_saved = False
-        try:
-            self.metrics_collector.save(metrics_dir)
-            self.metrics_collector.print_summary()
-            metrics_saved = True
-        except Exception as exc:
-            rospy.logerr("Failed to save direct teleop metrics: %s", exc)
         try:
             self.logger.save(session_timestamp=self.session_timestamp)
             logger_saved = True
         except Exception as exc:
             rospy.logerr("Failed to save direct teleop control log: %s", exc)
+        try:
+            self.metrics_collector.save(root / "metrics")
+            self.metrics_collector.print_summary()
+            metrics_saved = True
+        except Exception as exc:
+            rospy.logerr("Failed to save direct teleop metrics: %s", exc)
+        pcfg = self.logger.config.get("logging", {}).get("path_coverage")
+        if metrics_saved and isinstance(pcfg, dict):
+            try:
+                cov = apply_path_coverage_to_metrics(root, pcfg)
+                if cov is None:
+                    rospy.logwarn(
+                        "path_coverage skipped: missing control/data.npz or ee_pose"
+                    )
+                else:
+                    rospy.loginfo("Path coverage: %.1f%%", 100.0 * cov)
+            except ValueError as exc:
+                rospy.logerr("path_coverage: %s", exc)
+            except Exception as exc:
+                rospy.logerr("Failed to apply path_coverage: %s", exc)
         self._saved = metrics_saved and logger_saved
 
     def _joy_callback(self, msg):
@@ -255,6 +269,7 @@ class DirectTeleopROSNode:
         rospy.loginfo("Direct teleop received joint states.")
 
     def _wait_for_start(self, rate):
+        maybe_prompt_trial_metadata(self.logger)
         self.start_end_button_interface.reset_button()
         enter_pressed = threading.Event()
 
@@ -376,6 +391,7 @@ class DirectTeleopROSNode:
         desired_ee_vel = teleop_ee_twist_for_control(
             axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel),
             yaw,
+            Rot.from_quat(self.robot_mdl.getEE(q)[1]).as_matrix(),
         )
         J = spatial_jacobian(self.robot_mdl, q)
         v_cmd = solve_diff_ik(

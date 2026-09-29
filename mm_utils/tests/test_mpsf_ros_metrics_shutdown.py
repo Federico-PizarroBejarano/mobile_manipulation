@@ -42,6 +42,7 @@ def test_metrics_runtime_wiring_uses_comparable_dt_and_disabled_intent():
 
 def test_save_metrics_guard_skips_second_call(tmp_path):
     saved_paths = []
+    control_saves = []
 
     class FakeCollector:
         def save(self, metrics_dir):
@@ -50,9 +51,17 @@ def test_save_metrics_guard_skips_second_call(tmp_path):
         def print_summary(self):
             pass
 
+    class FakeLogger:
+        def __init__(self):
+            self.base_directory = tmp_path
+            self.config = {"logging": {}}
+
+        def save(self, session_timestamp):
+            control_saves.append(session_timestamp)
+
     node = SimpleNamespace(
         _metrics_saved=False,
-        logger=SimpleNamespace(base_directory=tmp_path, session_timestamp="unused"),
+        logger=FakeLogger(),
         session_timestamp="2026-09-11_12-00-00",
         metrics_collector=FakeCollector(),
     )
@@ -73,7 +82,12 @@ def test_save_metrics_guard_skips_second_call(tmp_path):
     )
     namespace = {
         "session_root": session_root,
-        "rospy": SimpleNamespace(logerr=lambda *args: None),
+        "rospy": SimpleNamespace(
+            logerr=lambda *args: None,
+            logwarn=lambda *args: None,
+            loginfo=lambda *args: None,
+        ),
+        "getattr": getattr,
     }
     exec(compile(method_module, str(MPSF_ROS), "exec"), namespace)
 
@@ -82,3 +96,33 @@ def test_save_metrics_guard_skips_second_call(tmp_path):
 
     assert len(saved_paths) == 1
     assert saved_paths[0].name == "metrics"
+    assert control_saves == ["2026-09-11_12-00-00"]
+
+
+def test_save_metrics_flushes_control_log_before_path_coverage():
+    """Square-end path: control logger must be saved inside _save_metrics."""
+    source = MPSF_ROS.read_text()
+    idx_log = source.find("self.logger.save(session_timestamp=self.session_timestamp)")
+    idx_metrics = source.find('self.metrics_collector.save(root / "metrics")')
+    idx_cov = source.find("apply_path_coverage_to_metrics(root, pcfg)")
+    assert idx_log != -1 and idx_metrics != -1 and idx_cov != -1
+    assert idx_log < idx_metrics < idx_cov
+
+
+def test_mpc_run_flushes_control_log_at_trial_end():
+    source = MPC_ROS.read_text()
+    assert "Failed to save control log at trial end" in source
+    module = ast.parse(source)
+    class_node = next(
+        item
+        for item in module.body
+        if isinstance(item, ast.ClassDef) and item.name == "ControllerROSNode"
+    )
+    run_node = next(
+        item
+        for item in class_node.body
+        if isinstance(item, ast.FunctionDef) and item.name == "run"
+    )
+    run_src = ast.get_source_segment(source, run_node)
+    assert run_src is not None
+    assert "self.logger.save(session_timestamp=self.session_timestamp)" in run_src

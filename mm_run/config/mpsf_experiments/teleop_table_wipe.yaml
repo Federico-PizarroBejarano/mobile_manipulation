@@ -49,7 +49,7 @@ controller:
   teleop:
     enabled: true
     max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
-    max_ee_vel: [0.12, 0.12, 0.12, 0.25, 0.25, 0.25]
+    max_ee_vel: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
 
   mpsf_params:
     objective_horizon: 10
@@ -92,3 +92,24 @@ include:
 logging:
   log_dir: "mpsf_experiments/teleop_table_wipe"
   log_level: 20
+  prompt_trial_metadata: true
+  # Independent wipe polylines (world frame). Table-to-table transitions are not scored.
+  path_coverage:
+    # Waypoints are compared to the logged EE frame origin (not the pad tip);
+    # measure in that frame or widen epsilon for tool offsets.
+    epsilon: 0.10
+    sample_spacing: 0.01
+    paths:
+      - name: table1
+        waypoints:
+          - [0.90, -0.29, 0.78]
+          - [1.33, -0.52, 0.78]
+          - [1.05, -0.92, 0.78]
+          - [0.85, -1.43, 0.78]
+          - [1.41, -1.46, 0.78]
+      - name: table2
+        waypoints:
+          - [1.38, -1.67, 0.95]
+          - [0.96, -1.93, 0.95]
+          - [1.41, -2.21, 0.95]
+          - [1.10, -2.48, 0.95]

@@ -18,9 +18,9 @@ from mm_utils.teleop_joy import (
     teleop_enable_held,
 )
 from mm_utils.teleop_mapping import (
-    EE_PITCH_AXIS,
+    EE_PITCH_BUTTONS,
     EE_ROLL_BUTTONS,
-    EE_YAW_BUTTONS,
+    EE_YAW_AXIS,
     ENABLE_TRIGGER_AXIS,
     HARDWARE_DEADMAN_AXIS,
     hardware_deadman_held,
@@ -123,77 +123,81 @@ class TestChassisBaseTwistToWorld:
 
 
 class TestTeleopEeTwistForControl:
-    def test_yaw_zero_passthrough(self):
+    def test_yaw_zero_identity_ee_passthrough(self):
         tw = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6])
-        np.testing.assert_allclose(teleop_ee_twist_for_control(tw, 0.0), tw)
+        np.testing.assert_allclose(teleop_ee_twist_for_control(tw, 0.0, np.eye(3)), tw)
 
-    def test_yaw_rotates_linear_only(self):
-        # Chassis +x lin -> world +y; body angular unchanged
-        tw = np.array([1.0, 0.0, 0.3, 0.5, -0.25, 0.1])
-        out = teleop_ee_twist_for_control(tw, np.pi / 2)
-        np.testing.assert_allclose(out, [0.0, 1.0, 0.3, 0.5, -0.25, 0.1], atol=1e-12)
+    def test_yaw_rotates_linear_and_converts_ang_to_body(self):
+        # Chassis +x lin -> world +y; chassis ωz stays body ωz when R=I
+        tw = np.array([1.0, 0.0, 0.3, 0.0, 0.0, 0.1])
+        out = teleop_ee_twist_for_control(tw, np.pi / 2, np.eye(3))
+        np.testing.assert_allclose(out, [0.0, 1.0, 0.3, 0.0, 0.0, 0.1], atol=1e-12)
+
+    def test_world_yaw_maps_into_body_when_tool_y_is_up(self):
+        # Tool +Y = world up: chassis/world yaw (ωz) becomes body ωy
+        tw = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.5])
+        R = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+        out = teleop_ee_twist_for_control(tw, 0.0, R)
+        np.testing.assert_allclose(out[3:], [0.0, 0.5, 0.0], atol=1e-12)
 
 
 class TestTeleopEeTwistToWorld:
-    def test_identity_ee_matches_control_when_yaw_zero(self):
+    def test_identity_passthrough(self):
         tw = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6])
         np.testing.assert_allclose(
             teleop_ee_twist_to_world(tw, 0.0, np.eye(3)), tw, atol=1e-12
         )
 
-    def test_ee_rotation_maps_body_ang_to_world(self):
-        # Body ωx with R = yaw(pi/2) -> world ωy; linear still via base yaw=0
+    def test_chassis_ang_rotates_with_base_yaw(self):
+        # Chassis ωx -> world ωy when base yaw = pi/2
         tw = np.array([0.0, 0.0, 0.0, 0.5, 0.0, 0.0])
-        R = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-        out = teleop_ee_twist_to_world(tw, 0.0, R)
+        out = teleop_ee_twist_to_world(tw, np.pi / 2, np.eye(3))
         np.testing.assert_allclose(out, [0.0, 0.0, 0.0, 0.0, 0.5, 0.0], atol=1e-12)
 
-    def test_ang_independent_of_base_yaw(self):
-        # Same body ω and EE attitude -> same world ω regardless of base yaw
-        tw = np.array([0.0, 0.0, 0.0, 0.0, 0.4, 0.0])
-        R = np.eye(3)
-        out0 = teleop_ee_twist_to_world(tw, 0.0, R)
-        out90 = teleop_ee_twist_to_world(tw, np.pi / 2, R)
+    def test_yaw_rate_independent_of_base_yaw(self):
+        tw = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.4])
+        out0 = teleop_ee_twist_to_world(tw, 0.0, np.eye(3))
+        out90 = teleop_ee_twist_to_world(tw, np.pi / 2, np.eye(3))
         np.testing.assert_allclose(out0[3:], out90[3:], atol=1e-12)
-        np.testing.assert_allclose(out0[3:], [0.0, 0.4, 0.0], atol=1e-12)
+        np.testing.assert_allclose(out0[3:], [0.0, 0.0, 0.4], atol=1e-12)
 
 
 class TestAxesToEeVelocity:
-    def test_full_deflection_stick_pitch_and_dpad_angles(self):
+    def test_full_deflection_stick_yaw_and_dpad_angles(self):
         axes = np.zeros(6)
         axes[0] = 0.5
         axes[1] = 1.0
-        axes[EE_PITCH_AXIS] = -0.5
+        axes[EE_YAW_AXIS] = -0.5
         axes[3] = 0.5
         buttons = [0] * 16
         buttons[EE_ROLL_BUTTONS[1]] = 1
-        buttons[EE_YAW_BUTTONS[1]] = 1
+        buttons[EE_PITCH_BUTTONS[1]] = 1
         max_vel = np.array([0.12, 0.12, 0.12, 0.25, 0.25, 0.25])
         out = axes_to_ee_velocity(axes, buttons, max_vel)
-        np.testing.assert_allclose(out, [0.12, 0.06, 0.06, 0.25, 0.125, -0.25])
+        np.testing.assert_allclose(out, [0.12, 0.06, 0.06, -0.25, 0.25, -0.125])
 
-    def test_dpad_up_is_positive_yaw(self):
+    def test_dpad_up_is_negative_pitch(self):
         axes = np.zeros(6)
         buttons = [0] * 16
         buttons[13] = 1
         out = axes_to_ee_velocity(axes, buttons, np.ones(6))
-        np.testing.assert_allclose(out[5], 1.0)
-        np.testing.assert_allclose(out[4], 0.0)
+        np.testing.assert_allclose(out[4], -1.0)
+        np.testing.assert_allclose(out[5], 0.0)
 
-    def test_dpad_left_is_negative_roll(self):
+    def test_dpad_left_is_positive_roll(self):
         axes = np.zeros(6)
         buttons = [0] * 16
         buttons[EE_ROLL_BUTTONS[0]] = 1
         out = axes_to_ee_velocity(axes, buttons, np.ones(6))
-        np.testing.assert_allclose(out[3], -1.0)
+        np.testing.assert_allclose(out[3], 1.0)
 
-    def test_right_stick_x_is_pitch_not_yaw(self):
+    def test_right_stick_x_is_yaw_not_pitch(self):
         axes = np.zeros(6)
-        axes[EE_PITCH_AXIS] = 1.0
+        axes[EE_YAW_AXIS] = 1.0
         out = axes_to_ee_velocity(axes, [0] * 16, np.ones(6))
         np.testing.assert_allclose(out[3], 0.0)
-        np.testing.assert_allclose(out[4], -1.0)
-        np.testing.assert_allclose(out[5], 0.0)
+        np.testing.assert_allclose(out[4], 0.0)
+        np.testing.assert_allclose(out[5], 1.0)
 
 
 class TestJointVelocityCommand:

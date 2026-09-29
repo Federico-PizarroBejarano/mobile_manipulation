@@ -4,9 +4,9 @@ import numpy as np
 
 from mm_utils.base_velocity_guard import body_twist_to_world
 from mm_utils.teleop_mapping import (
-    EE_PITCH_AXIS,
+    EE_PITCH_BUTTONS,
     EE_ROLL_BUTTONS,
-    EE_YAW_BUTTONS,
+    EE_YAW_AXIS,
     ENABLE_TRIGGER_AXIS,
     ENABLE_TRIGGER_THRESHOLD,
 )
@@ -46,28 +46,31 @@ def chassis_base_twist_to_world(v_chassis, yaw):
     return body_twist_to_world(v_chassis, float(yaw))
 
 
-def teleop_ee_twist_for_control(twist_teleop, yaw):
+def teleop_ee_twist_for_control(twist_teleop, yaw, R_ee_wb):
     """Map teleop EE twist to spatial-Jacobian / MPC ``EEVel`` convention.
 
-    ``twist_teleop`` is ``[vx, vy, vz, wx, wy, wz]`` with linear velocity in the
-    chassis frame and angular velocity in the EE body frame. Returns world-frame
-    linear velocity and EE-body angular velocity (matching the tool spatial
-    Jacobian and MPC ``EEVel`` cost).
+    ``twist_teleop`` is ``[vx, vy, vz, wx, wy, wz]`` with linear and angular
+    velocity in the chassis frame (stick yaw about vertical, d-pad pitch/roll
+    about chassis axes). Returns world-frame linear velocity and EE-body
+    angular velocity (matching the tool spatial Jacobian and MPC ``EEVel``).
     """
     tw = np.asarray(twist_teleop, dtype=float).reshape(6)
     rot = _planar_yaw_rotation(float(yaw))
-    return np.concatenate([rot @ tw[:3], tw[3:]])
+    R = np.asarray(R_ee_wb, dtype=float).reshape(3, 3)
+    lin_w = rot @ tw[:3]
+    ang_w = rot @ tw[3:]
+    return np.concatenate([lin_w, R.T @ ang_w])
 
 
-def teleop_ee_twist_to_world(twist_teleop, yaw, R_ee_wb):
+def teleop_ee_twist_to_world(twist_teleop, yaw, R_ee_wb=None):
     """Map teleop EE twist to a full world-frame twist.
 
-    Linear part is chassis→world via planar yaw. Angular part is EE-body→world
-    via ``R_ee_wb`` (body→world rotation, shape ``(3, 3)``).
+    Linear and angular parts are chassis→world via planar yaw. ``R_ee_wb`` is
+    accepted for call-site compatibility and ignored.
     """
-    tw = teleop_ee_twist_for_control(twist_teleop, yaw)
-    R = np.asarray(R_ee_wb, dtype=float).reshape(3, 3)
-    return np.concatenate([tw[:3], R @ tw[3:]])
+    tw = np.asarray(twist_teleop, dtype=float).reshape(6)
+    rot = _planar_yaw_rotation(float(yaw))
+    return np.concatenate([rot @ tw[:3], rot @ tw[3:]])
 
 
 def ee_yaw_from_buttons(buttons, left_idx, right_idx):
@@ -113,24 +116,23 @@ def axes_to_base_velocity(joy_axes, max_base_vel):
 def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel):
     """Map joy axes + d-pad buttons to teleop EE twist.
 
-    Returns ``[vx, vy, vz, wx, wy, wz]`` with linear velocity in the chassis
-    frame and angular velocity in the EE body frame (right stick X → body
-    pitch, d-pad up/down → body yaw, d-pad left/right → body roll). Callers
+    Returns ``[vx, vy, vz, wx, wy, wz]`` in the chassis frame (right stick X →
+    yaw about vertical, d-pad up/down → pitch, d-pad left/right → roll). Callers
     must convert with :func:`teleop_ee_twist_for_control` (MPC / spatial IK) or
     :func:`teleop_ee_twist_to_world` (world-frame consumers).
     """
     joy_axes = np.asarray(joy_axes, dtype=float).reshape(-1)
     max_ee_vel = np.asarray(max_ee_vel, dtype=float).reshape(6)
     joy_wx = ee_yaw_from_buttons(buttons, *EE_ROLL_BUTTONS)
-    joy_wz = ee_yaw_from_buttons(buttons, *EE_YAW_BUTTONS)
+    joy_wy = ee_yaw_from_buttons(buttons, *EE_PITCH_BUTTONS)
     return np.array(
         [
             joy_axes[1] * max_ee_vel[0],
             joy_axes[0] * max_ee_vel[1],
             joy_axes[3] * max_ee_vel[2],
-            joy_wx * max_ee_vel[3],
-            -joy_axes[EE_PITCH_AXIS] * max_ee_vel[4],
-            -joy_wz * max_ee_vel[5],
+            -joy_wx * max_ee_vel[3],
+            joy_wy * max_ee_vel[4],
+            joy_axes[EE_YAW_AXIS] * max_ee_vel[5],
         ],
         dtype=float,
     )

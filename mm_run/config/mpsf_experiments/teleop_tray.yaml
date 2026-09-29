@@ -50,7 +50,7 @@ controller:
   teleop:
     enabled: true
     max_base_vel: [0.5, 0.5, 0.5]  # [vx, vy, vyaw]
-    max_ee_vel: [0.25, 0.25, 0.25, 0.5, 0.5, 0.5]
+    max_ee_vel: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
 
   mpsf_params:
     objective_horizon: 10
@@ -89,3 +89,4 @@ include:
 logging:
   log_dir: "mpsf_experiments/teleop_tray"
   log_level: 20
+  prompt_trial_metadata: true

@@ -26,6 +26,9 @@ from mm_utils.teleop_joy import (
     VALID_TELEOP_MODES,
 )
 
+PRINT_EE_XYZ_PARAM = "/mm_run/print_ee_xyz"
+EE_POSE_XYZ_TOPIC = "/mm_run/ee_pose_xyz"
+
 
 class LowLevelCmdNode:
     def __init__(self):
@@ -108,12 +111,25 @@ class LowLevelCmdNode:
         self.lb_u_full = np.asarray(self.robot_mdl.lb_u, dtype=float).reshape(-1)
         self.ub_u_full = np.asarray(self.robot_mdl.ub_u, dtype=float).reshape(-1)
         self.nu = int(self.ctrl_config["robot"]["dims"]["u"])
+        self.nq = int(self.ctrl_config["robot"]["dims"]["q"])
 
         self.robot_interface = MobileManipulatorROSInterface()
         self.cmd_vel = np.zeros(self.nu, dtype=float)
 
         self.cmd_vel_world_pub = rospy.Publisher(
             "cmd_vel_world", Float64MultiArray, queue_size=1
+        )
+        # FK EE xyz (gripped_object) — same source as logged ee_pose without Vicon.
+        self.ee_pose_xyz_pub = rospy.Publisher(
+            EE_POSE_XYZ_TOPIC, Float64MultiArray, queue_size=1
+        )
+        if not rospy.has_param(PRINT_EE_XYZ_PARAM):
+            rospy.set_param(PRINT_EE_XYZ_PARAM, False)
+        rospy.loginfo(
+            "Publishing FK EE xyz on %s; set %s:=true to print each tick "
+            "(matches wipe path-coverage ee_pose when Vicon tool is unused).",
+            EE_POSE_XYZ_TOPIC,
+            PRINT_EE_XYZ_PARAM,
         )
 
         self.lock = threading.Lock()
@@ -267,6 +283,7 @@ class LowLevelCmdNode:
         t_elapsed = None
         stale = "n/a"
         out = np.zeros(self.nu, dtype=float)
+        q = None
         try:
             q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)
             lb_u, ub_u = self.lb_u_full[: self.nu], self.ub_u_full[: self.nu]
@@ -332,6 +349,8 @@ class LowLevelCmdNode:
         world_msg = Float64MultiArray(data=list(out))
         self.cmd_vel_world_pub.publish(world_msg)
         self.robot_interface.publish_cmd_vel(out)
+        if q is not None:
+            self._publish_ee_xyz(q)
 
         wall_dt_ms = (time.perf_counter() - wall_t0) * 1000.0
         ctrl_started = rospy.get_param("/controller_started", False)
@@ -362,8 +381,10 @@ class LowLevelCmdNode:
                 "check that node for errors)"
             )
         drive = "clock" if self._use_clock_drive else "timer"
+        # Slow status while waiting for Square/metadata so TTY prompts stay readable.
+        status_period = 10.0 if not ctrl_started else 0.5
         rospy.loginfo_throttle(
-            0.5,
+            status_period,
             "\n----- low_level_cmd_node -----\n"
             "  drive=%s  wall_cb_ms=%.3f  sim_dt_cfg=%.4f  pub_rate_hz=%.1f"
             "  plans_rx=%d  ticks=%d\n"
@@ -379,6 +400,26 @@ class LowLevelCmdNode:
             float(np.linalg.norm(out)),
             wait_hint,
         )
+
+    def _publish_ee_xyz(self, q):
+        """Publish (and optionally print) FK EE position used for path coverage."""
+        try:
+            q_ee = np.asarray(q, dtype=float).reshape(-1)[: self.nq]
+            if q_ee.size < self.nq or not self.robot_interface.ready():
+                return
+            ee_pos, _ = self.robot_mdl.getEE(q_ee)
+            xyz = np.asarray(ee_pos, dtype=float).reshape(3)
+            self.ee_pose_xyz_pub.publish(Float64MultiArray(data=xyz.tolist()))
+            if bool(rospy.get_param(PRINT_EE_XYZ_PARAM, False)):
+                # Same format as path_coverage waypoints YAML entries.
+                print(
+                    f"- [{xyz[0]:.4f}, {xyz[1]:.4f}, {xyz[2]:.4f}]",
+                    flush=True,
+                )
+        except Exception as exc:
+            rospy.logwarn_throttle(
+                5.0, "low_level_cmd_node: EE xyz publish failed: %s", exc
+            )
 
 
 def main():

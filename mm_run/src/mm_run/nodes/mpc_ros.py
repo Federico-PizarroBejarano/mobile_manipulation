@@ -52,6 +52,7 @@ from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     append_teleop_sample,
     clear_experiment_timestamp,
+    maybe_prompt_trial_metadata,
     resolve_experiment_timestamp,
     session_root,
 )
@@ -974,6 +975,12 @@ class ControllerROSNode:
             self._end_mpc_cycle(cycle_t0, mpc_period, rate)
 
         self.bag_recorder.stop()
+        # Square (or loop exit) must flush the control log before metrics/path
+        # coverage run; shutdownhook alone is too late for a clean Square stop.
+        try:
+            self.logger.save(session_timestamp=self.session_timestamp)
+        except Exception as exc:
+            rospy.logerr("Failed to save control log at trial end: %s", exc)
 
     def _wait_for_start(self, rate):
         """Start on Square (controller) and/or Enter when a TTY is available.
@@ -981,6 +988,7 @@ class ControllerROSNode:
         Non-interactive (no TTY): wait for Square if joy is already publishing,
         otherwise start immediately so CI/sim without a pad does not hang.
         """
+        maybe_prompt_trial_metadata(self.logger)
         self.start_end_button_interface.reset_button()
         enter_pressed = threading.Event()
 

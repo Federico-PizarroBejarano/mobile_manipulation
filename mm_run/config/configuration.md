@@ -482,9 +482,16 @@ Joystick topic is **`/bluetooth_teleop/joy`**. Button map: `config/teleop/README
 logging:
   log_dir: str                    # Directory name (relative to results/)
   log_level: int                  # 0=not set, 10=debug, 20=info, 30=warning, 40=error
+  prompt_trial_metadata: bool     # optional; default false. If true, teleop asks for
+                                  # user name + trial number before Square/Enter start
+                                  # and writes them to control/data.npz and config.yaml
 ```
 
 Logs are saved to `mm_run/results/[log_dir]/[TIMESTAMP]/`:
 - `combined/` - Synchronous experiments (sim + control in one process)
 - `sim/` - Simulation data (asynchronous)
 - `control/` - Controller data (asynchronous)
+
+When `prompt_trial_metadata` is true and stdin is a TTY, the saved `control/config.yaml`
+also contains `logging.trial_metadata: {user, trial}`, and `control/data.npz` has scalar
+keys `user` and `trial`.

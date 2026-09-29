@@ -39,6 +39,7 @@ from mm_utils.diff_ik import (
 from mm_utils.ee_motion_infer import integrate_ee_motion
 from mm_utils.logging import DataLogger
 from mm_utils.metrics import MPSFMetricsCollector
+from mm_utils.path_coverage import apply_path_coverage_to_metrics
 from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
@@ -59,6 +60,7 @@ from mm_utils.teleop_session_logging import (
     append_teleop_sample,
     clear_experiment_timestamp,
     commanded_ee_twist,
+    maybe_prompt_trial_metadata,
     resolve_experiment_timestamp,
     session_root,
 )
@@ -351,23 +353,35 @@ class RLTeleopROSNode:
         if self._saved:
             return
         self.bag_recorder.stop()
-        metrics_dir = (
-            session_root(self.logger.base_directory, self.session_timestamp) / "metrics"
-        )
+        root = session_root(self.logger.base_directory, self.session_timestamp)
         metrics_saved = False
         logger_saved = False
-        try:
-            self.metrics_collector.save(metrics_dir)
-            self.metrics_collector.print_summary()
-            metrics_saved = True
-        except Exception as exc:
-            rospy.logerr("Failed to save RL teleop metrics: %s", exc)
         try:
             self.logger.save(session_timestamp=self.session_timestamp)
             logger_saved = True
             clear_experiment_timestamp()
         except Exception as exc:
             rospy.logerr("Failed to save RL teleop control log: %s", exc)
+        try:
+            self.metrics_collector.save(root / "metrics")
+            self.metrics_collector.print_summary()
+            metrics_saved = True
+        except Exception as exc:
+            rospy.logerr("Failed to save RL teleop metrics: %s", exc)
+        pcfg = self.logger.config.get("logging", {}).get("path_coverage")
+        if metrics_saved and isinstance(pcfg, dict):
+            try:
+                cov = apply_path_coverage_to_metrics(root, pcfg)
+                if cov is None:
+                    rospy.logwarn(
+                        "path_coverage skipped: missing control/data.npz or ee_pose"
+                    )
+                else:
+                    rospy.loginfo("Path coverage: %.1f%%", 100.0 * cov)
+            except ValueError as exc:
+                rospy.logerr("path_coverage: %s", exc)
+            except Exception as exc:
+                rospy.logerr("Failed to apply path_coverage: %s", exc)
         self._saved = metrics_saved and logger_saved
 
     def _sync_session_timestamp(self):
@@ -384,6 +398,7 @@ class RLTeleopROSNode:
         raise rospy.ROSInterruptException("shutdown while waiting for joint states")
 
     def _wait_for_start(self, rate):
+        maybe_prompt_trial_metadata(self.logger)
         enter_pressed = threading.Event()
         if sys.stdin.isatty():
             print("----- Press Square (controller) or Enter to start -----")

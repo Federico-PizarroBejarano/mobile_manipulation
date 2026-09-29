@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import datetime
+import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -194,3 +196,106 @@ def append_teleop_sample(logger, **kwargs):
     )
     logger.append("u_cmd", np.asarray(kwargs["u_cmd"], dtype=float).reshape(-1))
     logger.append("cycle_period", float(kwargs["cycle_period"]))
+
+
+def apply_trial_metadata(logger, user, trial):
+    """Record user/trial on the logger for both data.npz and config.yaml."""
+    user = str(user).strip()
+    trial = int(trial)
+    if not user:
+        raise ValueError("user must be non-empty")
+    if trial < 1:
+        raise ValueError("trial must be a positive integer")
+    logging_cfg = logger.config.setdefault("logging", {})
+    logging_cfg["trial_metadata"] = {"user": user, "trial": trial}
+    logger.add("user", user)
+    logger.add("trial", trial)
+
+
+def controlling_tty_available():
+    """True if we can talk to the controlling terminal (not just sys.stdin).
+
+    Under ``roslaunch``, node stdin is often not the keyboard even when logs
+    appear on screen; ``/dev/tty`` still reaches the launch terminal.
+    """
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR)
+        os.close(fd)
+        return True
+    except OSError:
+        return sys.stdin.isatty()
+
+
+def tty_input(prompt, input_fn=None):
+    """Prompt on the controlling TTY; fall back to ``input`` if unavailable."""
+    if input_fn is not None:
+        return input_fn(prompt)
+    try:
+        with open("/dev/tty", "r") as tin, open("/dev/tty", "w") as tout:
+            tout.write(str(prompt))
+            tout.flush()
+            line = tin.readline()
+            if line == "":
+                raise EOFError("EOF on /dev/tty")
+            return line.rstrip("\n")
+    except OSError:
+        return input(prompt)
+
+
+def _tty_write(msg):
+    try:
+        with open("/dev/tty", "w") as tout:
+            tout.write(msg)
+            tout.flush()
+    except OSError:
+        print(msg, end="", flush=True)
+
+
+def prompt_trial_metadata(input_fn=None):
+    """Blocking TTY prompts for user name and trial number."""
+
+    def _ask(prompt):
+        return str(tty_input(prompt, input_fn=input_fn)).strip()
+
+    _tty_write(
+        "\n===== TRIAL METADATA =====\n"
+        "Enter user name and trial number here (this terminal).\n"
+        "Square/Enter start is enabled AFTER these prompts.\n\n"
+    )
+
+    while True:
+        user = _ask("User name: ")
+        if user:
+            _tty_write(f"  recorded user = {user!r}\n")
+            break
+        _tty_write("User name must be non-empty.\n")
+    while True:
+        raw = _ask("Trial number: ")
+        try:
+            trial = int(raw)
+            if trial >= 1:
+                _tty_write(
+                    f"  recorded trial = {trial}\n"
+                    f"===== METADATA OK: user={user!r} trial={trial} =====\n\n"
+                )
+                return user, trial
+        except ValueError:
+            pass
+        _tty_write("Trial number must be a positive integer.\n")
+
+
+def maybe_prompt_trial_metadata(logger, input_fn=None, isatty_fn=None):
+    """If YAML-enabled and a TTY is available, prompt and record trial metadata.
+
+    Returns ``{"user", "trial"}`` when recorded, otherwise ``None``.
+    """
+    if isatty_fn is None:
+        isatty_fn = controlling_tty_available
+    logging_cfg = logger.config.get("logging") or {}
+    if not logging_cfg.get("prompt_trial_metadata", False):
+        return None
+    if not isatty_fn():
+        return None
+    user, trial = prompt_trial_metadata(input_fn=input_fn)
+    apply_trial_metadata(logger, user, trial)
+    return {"user": user, "trial": trial}

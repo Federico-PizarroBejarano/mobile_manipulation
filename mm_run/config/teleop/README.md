@@ -185,9 +185,9 @@ Indices are only in `mm_utils/src/mm_utils/teleop_mapping.py`. Change mappings t
 | Triangle | Y | Toggle gripper open / close |
 | Cross | A | Toggle base ↔ EE (`mpsf`/`direct`; unused in `rl`) |
 | Square | X | Start / stop experiment |
-| Right stick X | Right stick X | EE pitch (base yaw in base mode) |
+| Right stick X | Right stick X | EE yaw about vertical (base yaw in base mode) |
 | D-pad L / R | D-pad L / R | EE roll |
-| D-pad up / down | D-pad up / down | EE yaw |
+| D-pad up / down | D-pad up / down | EE pitch |
 
 ### Verify indices
 
@@ -217,6 +217,10 @@ Each trial writes under `mm_run/results/<log_dir>/<timestamp>/`:
 - `control/data.npz` — states, joy, desired twists, `u_cmd`, (MPSF) `mpc_*`
 - `metrics/metrics.npz` + `summary.txt`
 - `bag/trial.bag` (or `trial_all.bag` if `bag_all:=true`)
+
+For user studies, set `logging.prompt_trial_metadata: true` in the experiment YAML to
+pause before Square/Enter and record `user` + `trial` into `control/data.npz` and
+`control/config.yaml` (see `configuration.md`). Default is off.
 
 Hardware: `record_bag` defaults true. Sim: false unless passed.
 Bag starts on Square/Enter and stops on Square/shutdown.
