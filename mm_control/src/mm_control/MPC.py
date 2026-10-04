@@ -9,6 +9,7 @@ from mm_control.MPCBase import MPCBase
 from mm_control.MPCCostFunctions import CostFunctionRegistry
 from mm_utils.math import wrap_pi_scalar
 from mm_utils.parsing import parse_ros_path
+from mm_utils.teleop_joy import scale_teleop_control_effort
 
 
 class MPC(MPCBase):
@@ -170,16 +171,20 @@ class MPC(MPCBase):
         else:
             self._velocity_ee_mask = self.ee_mask.copy()
 
-        # Pre-compute control effort params (constant)
+        # Nominal ControlEffort weights. Teleop strictness scales copies of these
+        # each solve so mode toggles cannot compound.
         effort_params = self.params["cost_params"]["ControlEffort"]
         self._control_effort_param_names = [
             f"{param_name}_ControlEffort"
             for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]
         ]
-        self._control_effort_param_values = [
-            effort_params[param_name]
+        self._control_effort_nominal = [
+            np.asarray(effort_params[param_name], dtype=float)
             for param_name in ["Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub"]
         ]
+        self.teleop_effort_mode = None
+        self._ee_teleop_strictness = 1.0
+        self._base_teleop_strictness = 1.0
 
         # Pre-compute manipulability params (constant)
         if self.manipulability_enabled:
@@ -188,16 +193,44 @@ class MPC(MPCBase):
         else:
             self._manipulability_weight = None
 
+    def set_teleop_effort_strictness(self, ee_strictness, base_strictness):
+        """Store MPSF teleop effort scales. ``1.0`` leaves the YAML weights."""
+        ee_strictness = float(ee_strictness)
+        base_strictness = float(base_strictness)
+        if ee_strictness < 0.0 or base_strictness < 0.0:
+            raise ValueError(
+                "teleop strictness must be >= 0, got "
+                f"ee={ee_strictness}, base={base_strictness}"
+            )
+        self._ee_teleop_strictness = ee_strictness
+        self._base_teleop_strictness = base_strictness
+
+    def set_teleop_effort_mode(self, mode):
+        """Select which subsystem's effort weights are scaled this solve.
+
+        ``"ee"`` scales base velocity and acceleration (``Qvb``, ``Qub``).
+        ``"base"`` scales arm velocity and acceleration (``Qva``, ``Qua``).
+        ``None`` writes the nominal YAML weights.
+        """
+        if mode not in (None, "base", "ee"):
+            raise ValueError(
+                f"teleop effort mode must be 'base', 'ee', or None, got {mode}"
+            )
+        self.teleop_effort_mode = mode
+
     def _set_control_effort_params(self, curr_p_map):
         """Set ControlEffort cost function parameters in the parameter map.
 
         Args:
             curr_p_map (casadi.struct_MX): Current parameter map to update.
         """
-        # Use pre-computed parameter names and values
-        for param_name, param_value in zip(
-            self._control_effort_param_names, self._control_effort_param_values
-        ):
+        values = scale_teleop_control_effort(
+            self._control_effort_nominal,
+            self.teleop_effort_mode,
+            self._ee_teleop_strictness,
+            self._base_teleop_strictness,
+        )
+        for param_name, param_value in zip(self._control_effort_param_names, values):
             curr_p_map[param_name] = param_value
 
     def _set_manipulability_params(self, curr_p_map):
@@ -313,7 +346,8 @@ class MPC(MPCBase):
             r_bar_map, x_bar_initial, u_bar_initial
         )
         self._solve_and_extract(xo, t, curr_p_map_bar, x_bar_initial, u_bar_initial)
-        self._update_logging(curr_p_map_bar)
+        if self.record_horizon_log:
+            self._update_logging(curr_p_map_bar)
 
         velocity_traj = self.x_bar[:, self.DoF :].copy()
         return velocity_traj, self.u_bar.copy()

@@ -32,6 +32,28 @@ def session_root(base_directory, session_timestamp):
     return Path(base_directory) / str(session_timestamp)
 
 
+def results_user_dirname(user):
+    """Single path segment for a results subdirectory named after the user."""
+    name = str(user).strip()
+    if name in ("", ".", "..") or "/" in name or "\\" in name or "\0" in name:
+        raise ValueError(f"user name is not a valid results folder: {user!r}")
+    return name
+
+
+def nest_results_under_user(logger, user):
+    """Point ``logger.base_directory`` at ``<log_dir>/<user>/`` once.
+
+    Later ``session_root`` / ``DataLogger.save`` calls then land at
+    ``<log_dir>/<user>/<timestamp>/``. No-op if already nested under ``user``.
+    """
+    name = results_user_dirname(user)
+    base = Path(logger.base_directory)
+    if base.name == name:
+        return base
+    logger.base_directory = base / name
+    return logger.base_directory
+
+
 def format_session_timestamp(when=None):
     """Wall-time stamp used as the results session folder name."""
     when = when or datetime.datetime.now()
@@ -175,6 +197,20 @@ def commanded_ee_twist(J, u_cmd):
     return (J @ u_cmd).reshape(6)
 
 
+def commanded_ee_twists(q_log, u_log, jacobian_fn):
+    """Cartesian EE twists ``J(q) @ u`` for each logged sample."""
+    q_log = np.asarray(q_log, dtype=float)
+    u_log = np.asarray(u_log, dtype=float)
+    if q_log.ndim == 1:
+        q_log = q_log.reshape(1, -1)
+    if u_log.ndim == 1:
+        u_log = u_log.reshape(1, -1)
+    twists = np.zeros((q_log.shape[0], 6), dtype=float)
+    for i in range(q_log.shape[0]):
+        twists[i] = commanded_ee_twist(jacobian_fn(q_log[i]), u_log[i])
+    return twists
+
+
 def append_teleop_sample(logger, **kwargs):
     logger.append("ts", float(kwargs["ts"]))
     logger.append("q", np.asarray(kwargs["q"], dtype=float).reshape(-1))
@@ -206,10 +242,50 @@ def apply_trial_metadata(logger, user, trial):
         raise ValueError("user must be non-empty")
     if trial < 1:
         raise ValueError("trial must be a positive integer")
+    results_user_dirname(user)
     logging_cfg = logger.config.setdefault("logging", {})
     logging_cfg["trial_metadata"] = {"user": user, "trial": trial}
     logger.add("user", user)
     logger.add("trial", trial)
+    nest_results_under_user(logger, user)
+
+
+VALID_LOGGING_PROFILES = ("debug", "deploy")
+VALID_TELEOP_BACKENDS = ("none", "mpsf", "direct", "rl")
+
+
+def logging_profile(config):
+    """Return ``debug`` or ``deploy``. A missing key stays on ``debug``."""
+    logging_cfg = {}
+    if isinstance(config, dict):
+        logging_cfg = config.get("logging", {}) or {}
+    profile = str(logging_cfg.get("profile", "debug")).strip()
+    if profile not in VALID_LOGGING_PROFILES:
+        raise ValueError(
+            f"logging.profile must be one of {VALID_LOGGING_PROFILES}, got {profile!r}"
+        )
+    return profile
+
+
+def apply_logging_profile(logger, profile):
+    """Record the logging profile on both data.npz and config.yaml."""
+    profile = logging_profile({"logging": {"profile": profile}})
+    logger.config.setdefault("logging", {})["profile"] = profile
+    logger.data["logging_profile"] = profile
+
+
+def apply_teleop_backend(logger, backend):
+    """Record launch teleop backend in both data.npz and config.yaml.
+
+    Allows overwrite so MPSF (subclass of MPC) can replace the parent's ``none``.
+    """
+    backend = str(backend).strip()
+    if backend not in VALID_TELEOP_BACKENDS:
+        raise ValueError(
+            f"teleop_backend must be one of {VALID_TELEOP_BACKENDS}, got {backend!r}"
+        )
+    logger.config.setdefault("logging", {})["teleop_backend"] = backend
+    logger.data["teleop_backend"] = backend
 
 
 def controlling_tty_available():
@@ -260,7 +336,7 @@ def prompt_trial_metadata(input_fn=None):
     _tty_write(
         "\n===== TRIAL METADATA =====\n"
         "Enter user name and trial number here (this terminal).\n"
-        "Square/Enter start is enabled AFTER these prompts.\n\n"
+        "Square/Enter starts the trial AFTER these prompts. Circle ends it.\n\n"
     )
 
     while True:

@@ -12,7 +12,7 @@
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
   <arg name="teleop" default="none" doc="direct|mpsf|rl|none — which plan publisher to run"/>
   <arg name="mpc_plan_topic" default="/mpc_plan" doc="topic for mm_run/MpcPlan between plan and low-level nodes"/>
-  <arg name="record_bag" default="false" doc="record rosbag on Square/Enter start, stop on Square/shutdown"/>
+  <arg name="record_bag" default="false" doc="record rosbag on Square/Enter start, stop on Circle/shutdown"/>
   <arg name="bag_all" default="false" doc="if true, record all topics (trial_all.bag) instead of curated set"/>
 
   <!-- Consumed by low_level_cmd_node (rejects invalid values so typos don't leave a bricked stack). -->

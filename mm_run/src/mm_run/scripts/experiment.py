@@ -18,6 +18,7 @@ from mm_utils.mpc_plan_tracking import (
     build_plan_interpolators,
     low_level_velocity_step,
 )
+from mm_utils.teleop_session_logging import logging_profile
 
 
 def main():
@@ -87,6 +88,7 @@ def main():
         raise ValueError(f"Unknown controller type: {ctrl_config['type']}")
 
     controller = control_class(ctrl_config)
+    controller.record_horizon_log = logging_profile(config) != "deploy"
 
     # Simulator (GUI opens here only after controller is ready)
     sim = simulation.BulletSimulation(
@@ -299,7 +301,7 @@ def main():
             logger.append("r_ew_w_ds", r_ew_wd)
         if v_ew_wd is not None:
             logger.append("v_ew_w_ds", v_ew_wd)
-        if "MPC" in ctrl_config["type"]:
+        if "MPC" in ctrl_config["type"] and controller.record_horizon_log:
             for key, val in controller.log.items():
                 logger.append("_".join(["mpc", key]) + "s", val)
 

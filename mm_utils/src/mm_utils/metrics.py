@@ -66,6 +66,232 @@ def compute_rmse(actual, reference, mask=None):
     return rmse
 
 
+_HORIZON_CONSTRAINT_SKIP = frozenset(
+    {"mpc_state_constraints", "mpc_control_constraints"}
+)
+_VIOLATION_THRESHOLD = 1e-3
+
+
+def _log_array(log_data, key):
+    if key not in log_data:
+        return None
+    values = log_data[key]
+    if values is None or len(values) == 0:
+        return None
+    return np.asarray(values, dtype=float)
+
+
+def _mode_name(mode_value):
+    return {0: "base", 1: "ee", 2: "rl"}.get(int(mode_value), "")
+
+
+def _subspace_active(mode_name, enabled, subspace):
+    if enabled < 0.5:
+        return False
+    if mode_name == "rl":
+        return True
+    return mode_name == subspace
+
+
+def _ravel_numeric(sample):
+    return np.asarray(sample, dtype=float).ravel()
+
+
+def _state_bound_violation(q, v, lb, ub):
+    q = np.asarray(q, dtype=float).reshape(-1).copy()
+    v = np.asarray(v, dtype=float).reshape(-1)
+    for i in range(2, q.size):
+        q[i] = wrap_pi_scalar(q[i])
+    x = np.hstack([q, v])
+    lb = np.asarray(lb, dtype=float).reshape(-1)
+    ub = np.asarray(ub, dtype=float).reshape(-1)
+    if x.size != lb.size or x.size != ub.size:
+        return None
+    per_dim = np.maximum(x - ub, lb - x)
+    return float(np.max(per_dim)), per_dim, bool(np.max(per_dim) > _VIOLATION_THRESHOLD)
+
+
+def _input_bound_violation(u_bar, lb, ub):
+    u_bar = np.asarray(u_bar, dtype=float)
+    if u_bar.ndim == 1:
+        u_bar = u_bar.reshape(1, -1)
+    lb = np.asarray(lb, dtype=float).reshape(-1)
+    ub = np.asarray(ub, dtype=float).reshape(-1)
+    if u_bar.shape[-1] != lb.size or u_bar.shape[-1] != ub.size:
+        return None
+    per_knot = np.maximum(u_bar - ub, lb - u_bar)
+    per_dim = np.max(per_knot, axis=0)
+    return (
+        float(np.max(per_knot)),
+        per_dim,
+        bool(np.any(per_knot > _VIOLATION_THRESHOLD)),
+    )
+
+
+def populate_collector_from_log(
+    collector,
+    log_data,
+    jerk_dt=None,
+    state_lb=None,
+    state_ub=None,
+    input_lb=None,
+    input_ub=None,
+    base_mask=None,
+    ee_mask=None,
+    commanded_ee_twists=None,
+):
+    """Fill ``collector`` once from a finished teleop control log.
+
+    Corrections for a subspace are zero unless teleop is enabled and that
+    subspace is active (``base``, ``ee``, or both when the mode is ``rl``).
+    ``jerk_dt`` is a scalar used for every step, or ``None`` to use each
+    sample's logged ``cycle_period``. Horizon collision and input-bound lines
+    are included only when the log contains them.
+    """
+    collector.reset()
+    u = _log_array(log_data, "u_cmd")
+    if u is None:
+        return
+    if u.ndim == 1:
+        u = u.reshape(1, -1)
+    n = u.shape[0]
+
+    def col(key, width):
+        arr = _log_array(log_data, key)
+        if arr is None:
+            return np.zeros((n, width), dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(n, -1)
+        return arr
+
+    desired_base = col("desired_base_vel", 3)
+    desired_ee = col("desired_ee_vel", 6)
+    measured_base = col("base_vel", 3)
+    measured_ee = col("ee_vel", 6)
+    modes = _log_array(log_data, "teleop_mode")
+    enabled = _log_array(log_data, "teleop_enabled")
+    if modes is None:
+        modes = np.full(n, -1.0)
+    if enabled is None:
+        enabled = np.zeros(n)
+    modes = np.asarray(modes, dtype=float).reshape(-1)
+    enabled = np.asarray(enabled, dtype=float).reshape(-1)
+    periods = _log_array(log_data, "cycle_period")
+    if periods is not None:
+        periods = np.asarray(periods, dtype=float).reshape(-1)
+    twists = None
+    if commanded_ee_twists is not None:
+        twists = np.asarray(commanded_ee_twists, dtype=float)
+        if twists.ndim == 1:
+            twists = twists.reshape(n, -1)
+
+    q = _log_array(log_data, "q")
+    v = _log_array(log_data, "v")
+    if q is not None and q.ndim == 1:
+        q = q.reshape(1, -1)
+    if v is not None and v.ndim == 1:
+        v = v.reshape(1, -1)
+    u_bars = log_data.get("mpc_u_bars") if isinstance(log_data, dict) else None
+
+    horizon = {}
+    if isinstance(log_data, dict):
+        for key, values in log_data.items():
+            if not (
+                isinstance(key, str)
+                and key.startswith("mpc_")
+                and key.endswith("_constraints")
+                and key not in _HORIZON_CONSTRAINT_SKIP
+            ):
+                continue
+            horizon[key[len("mpc_") : -len("_constraints")]] = values
+
+    for i in range(n):
+        mode_name = _mode_name(modes[i]) if i < modes.size else ""
+        en = float(enabled[i]) if i < enabled.size else 0.0
+        base_on = _subspace_active(mode_name, en, "base")
+        ee_on = _subspace_active(mode_name, en, "ee")
+        if base_on:
+            intent_base = compute_corrections(desired_base[i], u[i, :3], base_mask)
+            tracking_base = compute_corrections(desired_base[i], measured_base[i])
+        else:
+            intent_base = 0.0
+            tracking_base = 0.0
+        if ee_on:
+            ee_command = twists[i] if twists is not None else u[i, 3:9]
+            intent_ee = compute_corrections(desired_ee[i], ee_command, ee_mask)
+            tracking_ee = compute_corrections(desired_ee[i], measured_ee[i])
+        else:
+            intent_ee = 0.0
+            tracking_ee = 0.0
+
+        collector.metrics["intent_correction_base"].append(intent_base)
+        collector.metrics["intent_correction_ee"].append(intent_ee)
+        collector.metrics["base_corrections"].append(intent_base)
+        collector.metrics["ee_corrections"].append(intent_ee)
+        collector.metrics["tracking_error_base"].append(tracking_base)
+        collector.metrics["tracking_error_ee"].append(tracking_ee)
+        collector.metrics["teleop_mode"].append(
+            float(modes[i]) if i < modes.size else -1.0
+        )
+        collector.metrics["teleop_enabled"].append(1.0 if en >= 0.5 else 0.0)
+        collector.metrics["control_efforts"].append(float(np.linalg.norm(u[i])))
+
+        if i == 0:
+            jerk = 0.0
+        else:
+            if jerk_dt is None:
+                dt = float(periods[i]) if periods is not None else 0.0
+            else:
+                dt = float(jerk_dt)
+            jerk = (
+                float(compute_jerkiness(np.vstack([u[i - 1], u[i]]), dt))
+                if dt > 0.0
+                else 0.0
+            )
+        collector.metrics["jerks"].append(jerk)
+
+        step = {}
+        if (
+            state_lb is not None
+            and state_ub is not None
+            and q is not None
+            and v is not None
+        ):
+            state = _state_bound_violation(q[i], v[i], state_lb, state_ub)
+            if state is not None:
+                max_v, per_dim, violated = state
+                step["state"] = {
+                    "max": max_v,
+                    "violations": 1 if violated else 0,
+                    "max_per_dim": per_dim,
+                }
+        if (
+            input_lb is not None
+            and input_ub is not None
+            and u_bars is not None
+            and i < len(u_bars)
+        ):
+            control = _input_bound_violation(u_bars[i], input_lb, input_ub)
+            if control is not None:
+                max_v, per_dim, violated = control
+                step["control"] = {
+                    "max": max_v,
+                    "violations": 1 if violated else 0,
+                    "max_per_dim": per_dim,
+                }
+        for name, samples in horizon.items():
+            if i >= len(samples):
+                continue
+            flat = _ravel_numeric(samples[i])
+            if flat.size == 0:
+                continue
+            step[name] = {
+                "max": float(np.max(flat)),
+                "violations": 1 if np.any(flat > _VIOLATION_THRESHOLD) else 0,
+            }
+        collector.metrics["constraint_violations"].append(step)
+
+
 def compute_corrections(desired_vel, actual_vel, mask=None):
     """Compute corrections as norm of difference between desired and actual velocity.
 

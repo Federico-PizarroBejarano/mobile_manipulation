@@ -8,6 +8,7 @@ from mm_utils.path_coverage import (
     load_ee_xyz_from_control_npz,
     parse_path_coverage_config,
     polyline_arc_length,
+    print_trial_metrics_summary,
     sample_polyline,
     upsert_path_coverage_summary,
 )
@@ -254,3 +255,21 @@ def test_apply_skips_when_control_missing(tmp_path):
         "sample_spacing": 0.1,
     }
     assert apply_path_coverage_to_metrics(session, cfg) is None
+
+
+def test_print_trial_metrics_summary_includes_path_coverage(tmp_path, capsys):
+    session = tmp_path / "trial"
+    metrics = session / "metrics"
+    metrics.mkdir(parents=True)
+    (metrics / "summary.txt").write_text(
+        "EXPERIMENT METRICS SUMMARY\nPath coverage: 87.3%\nPath coverage (table1): 100.0%\n"
+    )
+    assert print_trial_metrics_summary(session) is True
+    out = capsys.readouterr().out
+    assert "EXPERIMENT METRICS SUMMARY" in out
+    assert "Path coverage: 87.3%" in out
+    assert "Path coverage (table1): 100.0%" in out
+
+
+def test_print_trial_metrics_summary_missing_file(tmp_path):
+    assert print_trial_metrics_summary(tmp_path / "missing") is False

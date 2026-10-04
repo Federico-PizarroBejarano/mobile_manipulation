@@ -1,6 +1,10 @@
 import numpy as np
 
-from mm_utils.metrics import MPSFMetricsCollector, compute_corrections
+from mm_utils.metrics import (
+    MPSFMetricsCollector,
+    compute_corrections,
+    populate_collector_from_log,
+)
 
 
 class Ctrl:
@@ -90,3 +94,96 @@ def test_save_writes_npz_and_summary(tmp_path):
     assert (out / "summary.txt").is_file()
     data = np.load(out / "metrics.npz", allow_pickle=True)
     assert float(data["mean_control_effort"]) == 1.5
+
+
+def _sample_log(mode, enabled, u, desired_ee, desired_base=None, ee_vel=None):
+    n = len(u)
+    if desired_base is None:
+        desired_base = np.zeros((n, 3))
+    if ee_vel is None:
+        ee_vel = np.zeros((n, 6))
+    return {
+        "u_cmd": np.asarray(u, dtype=float),
+        "desired_base_vel": np.asarray(desired_base, dtype=float),
+        "desired_ee_vel": np.asarray(desired_ee, dtype=float),
+        "base_vel": np.zeros((n, 3)),
+        "ee_vel": np.asarray(ee_vel, dtype=float),
+        "teleop_mode": np.full(n, mode, dtype=float),
+        "teleop_enabled": np.full(n, enabled, dtype=float),
+        "cycle_period": np.full(n, 0.2),
+        "q": np.zeros((n, 3)),
+        "v": np.zeros((n, 3)),
+    }
+
+
+def test_offline_summary_matches_live_ee_correction_and_nominal_jerk():
+    desired = np.array([0.1, 0, 0, 0, 0, 0], dtype=float)
+    commanded = np.array([0.05, 0, 0, 0, 0, 0], dtype=float)
+    u = np.vstack([np.zeros(9), np.ones(9)])
+    log = _sample_log(
+        mode=1, enabled=1.0, u=u, desired_ee=np.vstack([desired, desired])
+    )
+    log["q"] = np.zeros((2, 3))
+    collector = MPSFMetricsCollector()
+    populate_collector_from_log(
+        collector,
+        log,
+        jerk_dt=0.2,
+        commanded_ee_twists=np.vstack([commanded, commanded]),
+        state_lb=-np.ones(6),
+        state_ub=np.ones(6),
+    )
+    expected = compute_corrections(desired, commanded)
+    assert collector.metrics["ee_corrections"] == [expected, expected]
+    assert collector.metrics["base_corrections"] == [0.0, 0.0]
+    assert collector.metrics["jerks"] == [0.0, 15.0]
+    assert "self" not in collector.metrics["constraint_violations"][0]
+    assert "control" not in collector.metrics["constraint_violations"][0]
+
+
+def test_offline_summary_zeros_inactive_subspace_and_keeps_debug_constraints():
+    u = np.zeros((1, 9))
+    u[0, 3] = 0.4
+    desired_ee = np.zeros((1, 6))
+    desired_ee[0, 0] = 0.4
+    log = _sample_log(mode=0, enabled=1.0, u=u, desired_ee=desired_ee)
+    log["mpc_self_constraints"] = [np.array([-0.2, 0.02])]
+    log["mpc_u_bars"] = [np.array([[0.0, 0.0], [1.2, 0.0]])]
+    log["v"] = np.array([[0.0, 0.0, 2.0]])
+    collector = MPSFMetricsCollector()
+    populate_collector_from_log(
+        collector,
+        log,
+        jerk_dt=0.05,
+        state_lb=-np.ones(6),
+        state_ub=np.ones(6),
+        input_lb=np.array([-1.0, -1.0]),
+        input_ub=np.array([1.0, 1.0]),
+    )
+    assert collector.metrics["ee_corrections"] == [0.0]
+    assert collector.metrics["base_corrections"] == [0.0]
+    step = collector.metrics["constraint_violations"][0]
+    assert abs(step["self"]["max"] - 0.02) < 1e-9
+    assert step["self"]["violations"] == 1
+    assert step["control"]["violations"] == 1
+    assert abs(step["control"]["max"] - 0.2) < 1e-9
+    assert step["state"]["violations"] == 1
+
+
+def test_offline_cycle_period_jerk_and_rl_counts_both_subspaces():
+    u = np.vstack([np.zeros(9), np.ones(9)])
+    desired_ee = np.tile(np.array([0.2, 0, 0, 0, 0, 0]), (2, 1))
+    desired_base = np.tile(np.array([0.1, 0, 0]), (2, 1))
+    log = _sample_log(
+        mode=2, enabled=1.0, u=u, desired_ee=desired_ee, desired_base=desired_base
+    )
+    log["cycle_period"] = np.array([0.0, 0.1])
+    collector = MPSFMetricsCollector()
+    populate_collector_from_log(collector, log, jerk_dt=None)
+    assert collector.metrics["base_corrections"][1] == compute_corrections(
+        desired_base[1], u[1, :3]
+    )
+    assert collector.metrics["ee_corrections"][1] == compute_corrections(
+        desired_ee[1], u[1, 3:9]
+    )
+    assert collector.metrics["jerks"][1] == 30.0

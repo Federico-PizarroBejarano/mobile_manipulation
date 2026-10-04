@@ -9,10 +9,18 @@ from sensor_msgs.msg import Joy
 
 from mm_run.nodes.mpc_ros import ControllerROSNode
 from mm_run.scripts.mpsf_experiment import calculate_desired_velocity
-from mm_utils.metrics import MPSFMetricsCollector  # noqa: E402
-from mm_utils.path_coverage import apply_path_coverage_to_metrics
+from mm_utils.diff_ik import spatial_jacobian
+from mm_utils.metrics import (  # noqa: E402
+    MPSFMetricsCollector,
+    populate_collector_from_log,
+)
+from mm_utils.path_coverage import (
+    apply_path_coverage_to_metrics,
+    print_trial_metrics_summary,
+)
 from mm_utils.teleop_joy import (
     STICKS_ACTIVE_PARAM,
+    TeleopTwistRamp,
     axes_to_base_velocity,
     axes_to_ee_velocity,
     chassis_base_twist_to_world,
@@ -22,7 +30,11 @@ from mm_utils.teleop_joy import (
     teleop_ee_twist_for_control,
     teleop_enable_held,
 )
-from mm_utils.teleop_session_logging import session_root
+from mm_utils.teleop_session_logging import (
+    apply_teleop_backend,
+    commanded_ee_twists,
+    session_root,
+)
 
 
 class MPSFControllerROSNode(ControllerROSNode):
@@ -50,20 +62,24 @@ class MPSFControllerROSNode(ControllerROSNode):
 
         self.metrics_collector = MPSFMetricsCollector()
         self._metrics_saved = False
-        self._current_references = None
         self._current_desired_base_vel = None
         self._current_desired_ee_vel = None
-        self._sim_timestep = None
 
         super().__init__()
+        apply_teleop_backend(self.logger, "mpsf")
+
+        teleop_cfg = parse_teleop_config(self.ctrl_config)
+        self.teleop_enabled = teleop_cfg["enabled"]
+        ramp = teleop_cfg["reference_ramp"]
+        self.reference_ramp = TeleopTwistRamp(ramp["base"], ramp["ee"])
+        self.controller.set_teleop_effort_strictness(
+            teleop_cfg["ee_teleop_strictness"],
+            teleop_cfg["base_teleop_strictness"],
+        )
 
         self.joy_sub = rospy.Subscriber(
             "/bluetooth_teleop/joy", Joy, self._joy_callback
         )
-
-        teleop_cfg = parse_teleop_config(self.ctrl_config)
-        self.teleop_enabled = teleop_cfg["enabled"]
-        self._sim_timestep = self.simulation_timestep
 
         if self.teleop_enabled:
             rospy.loginfo("Teleoperation mode enabled - MPSF goals will be ignored")
@@ -110,6 +126,7 @@ class MPSFControllerROSNode(ControllerROSNode):
                         self.teleop_control_mode = "base"
                         rospy.loginfo("Switched to base control mode")
                     self._update_mpsf_masks()
+                    self.reference_ramp.reset()
                 self._last_toggle_button_state = pressed
 
             if self.teleop_enabled:
@@ -120,16 +137,19 @@ class MPSFControllerROSNode(ControllerROSNode):
         finally:
             self.joy_lock.release()
 
-    def _joystick_to_base_velocity(self):
+    def _ramped_base_twist(self, dt):
+        """Chassis-frame base twist, slewed toward the current stick."""
         with self.joy_lock:
-            axes = self.joy_axes.copy()
-        return axes_to_base_velocity(axes, self.teleop_max_base_vel)
+            raw = axes_to_base_velocity(self.joy_axes, self.teleop_max_base_vel)
+            return self.reference_ramp.base(raw, dt)
 
-    def _joystick_to_ee_velocity(self):
+    def _ramped_ee_twist(self, dt):
+        """Stick-frame EE twist, slewed toward the current stick and d-pad."""
         with self.joy_lock:
-            axes = self.joy_axes.copy()
-            buttons = self.joy_buttons.copy()
-        return axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel)
+            raw = axes_to_ee_velocity(
+                self.joy_axes, self.joy_buttons, self.teleop_max_ee_vel
+            )
+            return self.reference_ramp.ee(raw, dt)
 
     def _update_mpsf_masks(self):
         if not self.teleop_enabled:
@@ -144,7 +164,7 @@ class MPSFControllerROSNode(ControllerROSNode):
             self.controller.mpsf_ee_mask = np.array([1, 1, 1, 1, 1, 1], dtype=bool)
             rospy.loginfo("MPSF masks updated: base masked, ee enabled")
 
-    def update_references(self, references, robot_states):
+    def update_references(self, references, robot_states, cycle_period):
         if self.teleop_enabled:
             self.joy_lock.acquire()
             enabled = teleop_enable_held(self.joy_axes)
@@ -174,6 +194,9 @@ class MPSFControllerROSNode(ControllerROSNode):
                 )
 
             if not enabled:
+                with self.joy_lock:
+                    self.reference_ramp.reset()
+                self.controller.set_teleop_effort_mode(None)
                 self.controller.mpsf_base_mask = np.ones(3, dtype=float)
                 self.controller.mpsf_ee_mask = np.ones(6, dtype=float)
                 desired_velocity = {
@@ -183,14 +206,14 @@ class MPSFControllerROSNode(ControllerROSNode):
                 self._current_desired_base_vel = desired_velocity["base_velocity"]
                 self._current_desired_ee_vel = desired_velocity["ee_velocity"]
             else:
+                self.controller.set_teleop_effort_mode(self.teleop_control_mode)
                 q = np.asarray(robot_states[0], dtype=float).reshape(-1)
                 yaw = float(q[2])
+                ramp_dt = max(0.0, float(cycle_period))
                 if self.teleop_control_mode == "ee":
-                    _, ee_quat = self.controller.robot.getEE(q)
-                    R_ee = Rot.from_quat(ee_quat).as_matrix()
                     desired_ee_vel = gate_teleop_velocity(
                         teleop_ee_twist_for_control(
-                            self._joystick_to_ee_velocity(), yaw, R_ee
+                            self._ramped_ee_twist(ramp_dt), yaw
                         ),
                         True,
                     )
@@ -200,7 +223,7 @@ class MPSFControllerROSNode(ControllerROSNode):
                 else:
                     desired_base_vel = gate_teleop_velocity(
                         chassis_base_twist_to_world(
-                            self._joystick_to_base_velocity(), yaw
+                            self._ramped_base_twist(ramp_dt), yaw
                         ),
                         True,
                     )
@@ -246,7 +269,32 @@ class MPSFControllerROSNode(ControllerROSNode):
                 desired_velocity["ee_velocity"] = desired_ee_vel
             references["desired_velocity"] = desired_velocity
 
-        self._current_references = references
+    def _populate_metrics(self):
+        robot = self.controller.robot
+        data = self.logger.data
+        twists = None
+        if (
+            data.get("q") is not None
+            and data.get("u_cmd") is not None
+            and len(data["q"])
+        ):
+            twists = commanded_ee_twists(
+                data["q"],
+                data["u_cmd"],
+                lambda q: spatial_jacobian(robot, q),
+            )
+        # Shutdown mode masks describe only the last base/EE toggle. Subspace
+        # gating already drops the inactive mode, so leave these unmasked.
+        populate_collector_from_log(
+            self.metrics_collector,
+            data,
+            jerk_dt=1.0 / self._mpc_loop_hz,
+            state_lb=robot.lb_x,
+            state_ub=robot.ub_x,
+            input_lb=robot.lb_u,
+            input_ub=robot.ub_u,
+            commanded_ee_twists=twists,
+        )
 
     def _teleop_log_fields(self):
         with self.joy_lock:
@@ -272,31 +320,6 @@ class MPSFControllerROSNode(ControllerROSNode):
             "desired_ee_vel": desired_ee_vel,
         }
 
-    def _after_control_step(self, t, robot_states, states, references, u_current):
-        if self._current_references is not None:
-            metrics_enabled = bool(self.teleop_enabled and self._teleop_enable_active)
-            metric_desired_base = (
-                self._current_desired_base_vel if metrics_enabled else None
-            )
-            metric_desired_ee = (
-                self._current_desired_ee_vel if metrics_enabled else None
-            )
-            self.metrics_collector.update(
-                self._current_references,
-                states,
-                u_current,
-                metric_desired_base,
-                metric_desired_ee,
-                self.controller,
-                robot_states,
-                self._sim_timestep,
-                teleop_mode=self.teleop_control_mode,
-                teleop_enabled=metrics_enabled,
-                measured_base_vel=states["base"]["velocity"],
-                measured_ee_vel=states["EE"]["velocity"],
-                dt=1.0 / self._mpc_loop_hz,
-            )
-
     def shutdownhook(self):
         super().shutdownhook()
         self._save_metrics()
@@ -305,15 +328,18 @@ class MPSFControllerROSNode(ControllerROSNode):
         if self._metrics_saved:
             return
         root = session_root(self.logger.base_directory, self.session_timestamp)
-        # Square end returns from run() before rospy shutdown; flush control/data.npz
+        # Circle end returns from run() before rospy shutdown; flush control/data.npz
         # here so path_coverage (and offline recalc) see the same session as metrics.
+        try:
+            self._populate_metrics()
+        except Exception as exc:
+            rospy.logerr("Failed to reduce MPSF metrics: %s", exc)
         try:
             self.logger.save(session_timestamp=self.session_timestamp)
         except Exception as exc:
             rospy.logerr("Failed to save MPSF control log: %s", exc)
         try:
             self.metrics_collector.save(root / "metrics")
-            self.metrics_collector.print_summary()
             self._metrics_saved = True
         except Exception as exc:
             rospy.logerr("Failed to save MPSF metrics: %s", exc)
@@ -327,12 +353,12 @@ class MPSFControllerROSNode(ControllerROSNode):
                     rospy.logwarn(
                         "path_coverage skipped: missing control/data.npz or ee_pose"
                     )
-                else:
-                    rospy.loginfo("Path coverage: %.1f%%", 100.0 * cov)
             except ValueError as exc:
                 rospy.logerr("path_coverage: %s", exc)
             except Exception as exc:
                 rospy.logerr("Failed to apply path_coverage: %s", exc)
+        if not print_trial_metrics_summary(root):
+            self.metrics_collector.print_summary()
 
 
 if __name__ == "__main__":

@@ -9,100 +9,100 @@ cylinder:
   # South column (x = 0.8898), west -> east (-y)
   - name: "table_0_0"
     radius: 0.1905
-    length: 0.758
-    xyz: [0.8898, -0.1905, 0.339]
+    length: 0.75
+    xyz: [0.8898, -0.1905, 0.37]
     rpy: [0, 0, 0]
 
   - name: "table_0_1"
     radius: 0.1905
-    length: 0.758
-    xyz: [0.8898, -0.5715, 0.339]
+    length: 0.75
+    xyz: [0.8898, -0.5715, 0.37]
     rpy: [0, 0, 0]
 
   - name: "table_0_2"
     radius: 0.1905
-    length: 0.758
-    xyz: [0.8898, -0.9525, 0.339]
+    length: 0.75
+    xyz: [0.8898, -0.9525, 0.37]
     rpy: [0, 0, 0]
 
   - name: "table_0_3"
     radius: 0.1905
-    length: 0.758
-    xyz: [0.8898, -1.3335, 0.339]
+    length: 0.75
+    xyz: [0.8898, -1.3335, 0.37]
     rpy: [0, 0, 0]
 
   # North column (x = 1.2962), west -> east (-y)
   - name: "table_1_0"
     radius: 0.1905
-    length: 0.758
-    xyz: [1.2962, -0.1905, 0.339]
+    length: 0.75
+    xyz: [1.2962, -0.1905, 0.37]
     rpy: [0, 0, 0]
 
   - name: "table_1_1"
     radius: 0.1905
-    length: 0.758
-    xyz: [1.2962, -0.5715, 0.339]
+    length: 0.75
+    xyz: [1.2962, -0.5715, 0.37]
     rpy: [0, 0, 0]
 
   - name: "table_1_2"
     radius: 0.1905
-    length: 0.758
-    xyz: [1.2962, -0.9525, 0.339]
+    length: 0.75
+    xyz: [1.2962, -0.9525, 0.37]
     rpy: [0, 0, 0]
 
   - name: "table_1_3"
     radius: 0.1905
-    length: 0.758
-    xyz: [1.2962, -1.3335, 0.339]
+    length: 0.75
+    xyz: [1.2962, -1.3335, 0.37]
     rpy: [0, 0, 0]
 
   # Table 2: 23.5" wide (x), 39.5" long (-y), 35" high.
   # South column (x = 0.9438), west -> east (-y)
   - name: "table2_0_0"
     radius: 0.1492
-    length: 0.88
-    xyz: [0.9438, -1.6932, 0.44]
+    length: 0.90
+    xyz: [0.9438, -1.7332, 0.45]  # -1.7132 - 0.02 = -1.7332
     rpy: [0, 0, 0]
 
   - name: "table2_0_1"
     radius: 0.1492
-    length: 0.88
-    xyz: [0.9438, -1.9282, 0.44]
+    length: 0.90
+    xyz: [0.9438, -1.9682, 0.45]  # -1.9482 - 0.02 = -1.9682
     rpy: [0, 0, 0]
 
   - name: "table2_0_2"
     radius: 0.1492
-    length: 0.88
-    xyz: [0.9438, -2.1631, 0.44]
+    length: 0.90
+    xyz: [0.9438, -2.2031, 0.45]  # -2.1831 - 0.02 = -2.2031
     rpy: [0, 0, 0]
 
   - name: "table2_0_3"
     radius: 0.1492
-    length: 0.88
-    xyz: [0.9438, -2.3981, 0.44]
+    length: 0.90
+    xyz: [0.9438, -2.4381, 0.45]  # -2.4181 - 0.02 = -2.4381
     rpy: [0, 0, 0]
 
   # North column (x = 1.2422), west -> east (-y)
   - name: "table2_1_0"
     radius: 0.1492
-    length: 0.88
-    xyz: [1.2422, -1.6932, 0.44]
+    length: 0.90
+    xyz: [1.2422, -1.7332, 0.45]  # -1.7132 - 0.02 = -1.7332
     rpy: [0, 0, 0]
 
   - name: "table2_1_1"
     radius: 0.1492
-    length: 0.88
-    xyz: [1.2422, -1.9282, 0.44]
+    length: 0.90
+    xyz: [1.2422, -1.9682, 0.45]  # -1.9482 - 0.02 = -1.9682
     rpy: [0, 0, 0]
 
   - name: "table2_1_2"
     radius: 0.1492
-    length: 0.88
-    xyz: [1.2422, -2.1631, 0.44]
+    length: 0.90
+    xyz: [1.2422, -2.2031, 0.45]  # -2.1831 - 0.02 = -2.2031
     rpy: [0, 0, 0]
 
   - name: "table2_1_3"
     radius: 0.1492
-    length: 0.88
-    xyz: [1.2422, -2.3981, 0.44]
+    length: 0.90
+    xyz: [1.2422, -2.4381, 0.45]  # -2.4181 - 0.02 = -2.4381
     rpy: [0, 0, 0]

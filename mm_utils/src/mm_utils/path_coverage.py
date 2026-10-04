@@ -255,3 +255,16 @@ def apply_path_coverage_to_metrics(
     coverage, per_path = compute_paths_coverage(ee_xyz, paths, epsilon, sample_spacing)
     write_path_coverage_metrics(session_root / "metrics", coverage, per_path)
     return coverage
+
+
+def print_trial_metrics_summary(session_root: Path) -> bool:
+    """Print ``metrics/summary.txt`` (includes path coverage if already applied).
+
+    Returns True if the file existed and was printed.
+    """
+    summary_path = Path(session_root) / "metrics" / "summary.txt"
+    if not summary_path.is_file():
+        return False
+    text = summary_path.read_text()
+    print(text, end="" if text.endswith("\n") else "\n")
+    return True

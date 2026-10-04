@@ -7,16 +7,21 @@ from mm_utils.logging import DataLogger
 from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     append_teleop_sample,
+    apply_logging_profile,
+    apply_teleop_backend,
     apply_trial_metadata,
     build_curated_bag_topics,
     build_rosbag_record_cmd,
     clear_experiment_timestamp,
     commanded_ee_twist,
     format_session_timestamp,
+    logging_profile,
     maybe_prompt_trial_metadata,
+    nest_results_under_user,
     pad_joy_buttons,
     prompt_trial_metadata,
     resolve_experiment_timestamp,
+    results_user_dirname,
     session_root,
     vicon_object_topic,
 )
@@ -298,6 +303,63 @@ def test_apply_trial_metadata(tmp_path):
         "user": "alice",
         "trial": 3,
     }
+    assert logger.base_directory == Path(tmp_path) / "alice"
+    # Second apply must not nest again (user key already exists; new logger).
+    again = DataLogger(
+        {"logging": {"log_dir": str(tmp_path / "alice")}}, name="control"
+    )
+    nest_results_under_user(again, "alice")
+    assert again.base_directory == Path(tmp_path) / "alice"
+
+
+def test_results_user_dirname_rejects_path_separators():
+    assert results_user_dirname(" test ") == "test"
+    try:
+        results_user_dirname("a/b")
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "results folder" in str(exc)
+
+
+def test_save_nests_timestamp_under_user(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    apply_trial_metadata(logger, "test", 1)
+    logger.save(session_timestamp="2026-09-30_10-16-10")
+    saved = tmp_path / "test" / "2026-09-30_10-16-10" / "control" / "data.npz"
+    assert saved.is_file()
+    assert session_root(logger.base_directory, "2026-09-30_10-16-10") == (
+        tmp_path / "test" / "2026-09-30_10-16-10"
+    )
+
+
+def test_save_without_user_keeps_timestamp_layout(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    logger.save(session_timestamp="2026-09-30_10-16-10")
+    assert (tmp_path / "2026-09-30_10-16-10" / "control" / "data.npz").is_file()
+
+
+def test_apply_teleop_backend(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    apply_teleop_backend(logger, "mpsf")
+    assert logger.data["teleop_backend"] == "mpsf"
+    assert logger.config["logging"]["teleop_backend"] == "mpsf"
+    # Subclass override (e.g. mpsf_ros after mpc_ros sets "none")
+    apply_teleop_backend(logger, "direct")
+    assert logger.data["teleop_backend"] == "direct"
+    assert logger.config["logging"]["teleop_backend"] == "direct"
+
+
+def test_apply_teleop_backend_rejects_invalid(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    try:
+        apply_teleop_backend(logger, "joystick")
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "teleop_backend" in str(exc)
 
 
 def test_prompt_trial_metadata_reprompts_invalid():
@@ -358,3 +420,22 @@ def test_maybe_prompt_records_when_enabled(tmp_path):
         "user": "carol",
         "trial": 7,
     }
+
+
+def test_logging_profile_defaults_to_debug_and_rejects_unknown():
+    assert logging_profile({}) == "debug"
+    assert logging_profile({"logging": {}}) == "debug"
+    assert logging_profile({"logging": {"profile": "deploy"}}) == "deploy"
+    try:
+        logging_profile({"logging": {"profile": "trace"}})
+    except ValueError as exc:
+        assert "trace" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_apply_logging_profile_records_deploy(tmp_path):
+    logger = DataLogger({"logging": {"log_dir": str(tmp_path)}}, name="control")
+    apply_logging_profile(logger, "deploy")
+    assert logger.config["logging"]["profile"] == "deploy"
+    assert logger.data["logging_profile"] == "deploy"

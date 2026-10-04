@@ -77,6 +77,9 @@ class DataLogger:
                 data.npz
                 config.yaml
 
+        When trial metadata set a user, ``base_directory`` already includes
+        that user folder (``<log_dir>/<user>/``).
+
         Args:
             session_timestamp (str): Timestamp string in format "%Y-%m-%d_%H-%M-%S".
         """

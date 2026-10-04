@@ -32,8 +32,11 @@ from mm_utils.diff_ik import (
     spatial_jacobian,
 )
 from mm_utils.logging import DataLogger
-from mm_utils.metrics import MPSFMetricsCollector
-from mm_utils.path_coverage import apply_path_coverage_to_metrics
+from mm_utils.metrics import MPSFMetricsCollector, populate_collector_from_log
+from mm_utils.path_coverage import (
+    apply_path_coverage_to_metrics,
+    print_trial_metrics_summary,
+)
 from mm_utils.robotiq_gripper import (
     GRIPPER_TOGGLE_BUTTON,
     gripper_position,
@@ -43,6 +46,7 @@ from mm_utils.robotiq_gripper import (
 from mm_utils.teleop_joy import (
     FORCE_ZERO_LL_KP_PARAM,
     STICKS_ACTIVE_PARAM,
+    TeleopTwistRamp,
     axes_to_base_velocity,
     axes_to_ee_velocity,
     chassis_base_twist_to_world,
@@ -52,11 +56,20 @@ from mm_utils.teleop_joy import (
     teleop_ee_twist_for_control,
     teleop_enable_held,
 )
+from mm_utils.teleop_mapping import (
+    END_TRIAL_BUTTON,
+    START_TRIAL_BUTTON,
+    trial_button_action,
+)
 from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     append_teleop_sample,
+    apply_logging_profile,
+    apply_teleop_backend,
     clear_experiment_timestamp,
     commanded_ee_twist,
+    commanded_ee_twists,
+    logging_profile,
     maybe_prompt_trial_metadata,
     resolve_experiment_timestamp,
     session_root,
@@ -99,6 +112,8 @@ class DirectTeleopROSNode:
 
         self.teleop_max_base_vel = teleop_cfg["max_base_vel"]
         self.teleop_max_ee_vel = teleop_cfg["max_ee_vel"]
+        ramp = teleop_cfg["reference_ramp"]
+        self.reference_ramp = TeleopTwistRamp(ramp["base"], ramp["ee"])
 
         self.nu = int(self.ctrl_config["robot"]["dims"]["u"])
         self.dof = int(self.ctrl_config["robot"]["dims"]["q"])
@@ -108,6 +123,8 @@ class DirectTeleopROSNode:
             raise ValueError(f"ctrl_rate must be positive, got {self.rate_hz}")
 
         self.logger = DataLogger(copy.deepcopy(config), name="control")
+        apply_logging_profile(self.logger, logging_profile(config))
+        apply_teleop_backend(self.logger, "direct")
         dims = self.ctrl_config["robot"]["dims"]
         for key in ("q", "v", "x", "u"):
             if key in dims:
@@ -151,7 +168,8 @@ class DirectTeleopROSNode:
         self.ctrl_c = False
 
         self.robot_interface = MobileManipulatorROSInterface()
-        self.start_end_button_interface = JoystickButtonInterface(2)
+        self.start_button_interface = JoystickButtonInterface(START_TRIAL_BUTTON)
+        self.end_button_interface = JoystickButtonInterface(END_TRIAL_BUTTON)
         self.gripper_button_interface = JoystickButtonInterface(GRIPPER_TOGGLE_BUTTON)
         self._gripper_open = True
         self._gripper_no_sub_warned = False
@@ -185,14 +203,17 @@ class DirectTeleopROSNode:
         )
 
     def _sync_session_timestamp(self):
-        """Re-read shared stamp (sim may set it after our __init__)."""
+        """Re-read shared stamp (sim may set it after our __init__).
+
+        Always rebinds the bag path so a user folder applied during the start
+        prompt is included even when the timestamp itself did not change.
+        """
         ts = resolve_experiment_timestamp(create=True)
-        if ts == self.session_timestamp:
-            return
-        rospy.loginfo(
-            "Adopting experiment timestamp %s (was %s)", ts, self.session_timestamp
-        )
-        self.session_timestamp = ts
+        if ts != self.session_timestamp:
+            rospy.loginfo(
+                "Adopting experiment timestamp %s (was %s)", ts, self.session_timestamp
+            )
+            self.session_timestamp = ts
         self.bag_recorder.session_root = session_root(
             self.logger.base_directory, self.session_timestamp
         )
@@ -213,13 +234,16 @@ class DirectTeleopROSNode:
         metrics_saved = False
         logger_saved = False
         try:
+            self._populate_metrics()
+        except Exception as exc:
+            rospy.logerr("Failed to reduce direct teleop metrics: %s", exc)
+        try:
             self.logger.save(session_timestamp=self.session_timestamp)
             logger_saved = True
         except Exception as exc:
             rospy.logerr("Failed to save direct teleop control log: %s", exc)
         try:
             self.metrics_collector.save(root / "metrics")
-            self.metrics_collector.print_summary()
             metrics_saved = True
         except Exception as exc:
             rospy.logerr("Failed to save direct teleop metrics: %s", exc)
@@ -231,12 +255,12 @@ class DirectTeleopROSNode:
                     rospy.logwarn(
                         "path_coverage skipped: missing control/data.npz or ee_pose"
                     )
-                else:
-                    rospy.loginfo("Path coverage: %.1f%%", 100.0 * cov)
             except ValueError as exc:
                 rospy.logerr("path_coverage: %s", exc)
             except Exception as exc:
                 rospy.logerr("Failed to apply path_coverage: %s", exc)
+        if metrics_saved and not print_trial_metrics_summary(root):
+            self.metrics_collector.print_summary()
         self._saved = metrics_saved and logger_saved
 
     def _joy_callback(self, msg):
@@ -252,6 +276,7 @@ class DirectTeleopROSNode:
                     else:
                         self.teleop_control_mode = "base"
                         rospy.loginfo("Switched to base control mode")
+                    self.reference_ramp.reset()
                 self._last_toggle_button_state = pressed
 
             enabled = teleop_enable_held(self.joy_axes)
@@ -270,11 +295,12 @@ class DirectTeleopROSNode:
 
     def _wait_for_start(self, rate):
         maybe_prompt_trial_metadata(self.logger)
-        self.start_end_button_interface.reset_button()
+        self.start_button_interface.reset_button()
+        self.end_button_interface.reset_button()
         enter_pressed = threading.Event()
 
         if sys.stdin.isatty():
-            print("----- Press Square (controller) or Enter to start -----")
+            print("----- Press Square or Enter to start. Circle ends the trial. -----")
 
             def _wait_enter():
                 try:
@@ -284,17 +310,26 @@ class DirectTeleopROSNode:
                     pass
 
             threading.Thread(target=_wait_enter, daemon=True).start()
-        elif self.start_end_button_interface.ready():
-            print("----- Press Square (controller) to start -----")
+        elif self.start_button_interface.ready():
+            print("----- Press Square to start. Circle ends the trial. -----")
         else:
             print("----- Non-interactive start: skipping prompt -----")
             return
 
         while not self.ctrl_c and not rospy.is_shutdown():
-            if self.start_end_button_interface.button == 1:
-                self.start_end_button_interface.reset_button()
+            if (
+                trial_button_action(
+                    waiting=True,
+                    start_latched=self.start_button_interface.button == 1,
+                    end_latched=self.end_button_interface.button == 1,
+                )
+                == "start"
+            ):
+                self.start_button_interface.reset_button()
+                self.end_button_interface.reset_button()
                 return
             if enter_pressed.is_set():
+                self.end_button_interface.reset_button()
                 return
             rate.sleep()
         raise rospy.ROSInterruptException("shutdown while waiting to start")
@@ -349,15 +384,32 @@ class DirectTeleopROSNode:
             "open" if self._gripper_open else "closed",
         )
 
-    def _compute_v_cmd(self):
+    def _compute_v_cmd(self, cycle_period):
+        desired_base_vel = np.zeros(3, dtype=float)
+        desired_ee_vel = np.zeros(6, dtype=float)
+        ramp_dt = max(0.0, float(cycle_period))
         with self.joy_lock:
             axes = self.joy_axes.copy()
             buttons = self.joy_buttons.copy()
             mode = self.teleop_control_mode
             enabled = teleop_enable_held(axes)
+            if not enabled:
+                self.reference_ramp.reset()
+                ramped_base = None
+                ramped_ee = None
+            elif mode == "base":
+                ramped_base = self.reference_ramp.base(
+                    axes_to_base_velocity(axes, self.teleop_max_base_vel),
+                    ramp_dt,
+                )
+                ramped_ee = None
+            else:
+                ramped_base = None
+                ramped_ee = self.reference_ramp.ee(
+                    axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel),
+                    ramp_dt,
+                )
 
-        desired_base_vel = np.zeros(3, dtype=float)
-        desired_ee_vel = np.zeros(6, dtype=float)
         if not enabled:
             return (
                 np.zeros(self.nu, dtype=float),
@@ -372,9 +424,7 @@ class DirectTeleopROSNode:
         q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
         yaw = float(q[2])
         if mode == "base":
-            desired_base_vel = chassis_base_twist_to_world(
-                axes_to_base_velocity(axes, self.teleop_max_base_vel), yaw
-            )
+            desired_base_vel = chassis_base_twist_to_world(ramped_base, yaw)
             v_cmd = joint_velocity_command(
                 mode, desired_base_vel, desired_ee_vel, self.nu
             )
@@ -388,11 +438,7 @@ class DirectTeleopROSNode:
                 buttons,
             )
 
-        desired_ee_vel = teleop_ee_twist_for_control(
-            axes_to_ee_velocity(axes, buttons, self.teleop_max_ee_vel),
-            yaw,
-            Rot.from_quat(self.robot_mdl.getEE(q)[1]).as_matrix(),
-        )
+        desired_ee_vel = teleop_ee_twist_for_control(ramped_ee, yaw)
         J = spatial_jacobian(self.robot_mdl, q)
         v_cmd = solve_diff_ik(
             J,
@@ -432,7 +478,6 @@ class DirectTeleopROSNode:
         ee_pos, ee_quat = self.robot_mdl.getEE(q)
         ee_pose = np.hstack([ee_pos, Rot.from_quat(ee_quat).as_euler("xyz")])
         ee_vel = commanded_ee_twist(J, v)
-        ee_cmd_twist = commanded_ee_twist(J, v_cmd)
         base_pose = q[:3].copy()
         base_vel = v[:3].copy()
 
@@ -455,27 +500,28 @@ class DirectTeleopROSNode:
             cycle_period=cycle_period,
         )
 
-        states = {
-            "base": {"pose": base_pose, "velocity": base_vel},
-            "EE": {"pose": ee_pose, "velocity": ee_vel},
-        }
-        metric_desired_base = desired_base_vel if enabled and mode == "base" else None
-        metric_desired_ee = desired_ee_vel if enabled and mode == "ee" else None
-        self.metrics_collector.update(
-            {},
-            states,
-            v_cmd,
-            metric_desired_base,
-            metric_desired_ee,
-            self.metrics_controller,
-            (q, v),
-            self.mpc_dt,
-            teleop_mode=mode,
-            teleop_enabled=enabled,
-            commanded_ee_twist=ee_cmd_twist if mode == "ee" else None,
-            measured_base_vel=base_vel,
-            measured_ee_vel=ee_vel,
-            dt=cycle_period,
+    def _populate_metrics(self):
+        data = self.logger.data
+        twists = None
+        if (
+            data.get("q") is not None
+            and data.get("u_cmd") is not None
+            and len(data["q"])
+        ):
+            twists = commanded_ee_twists(
+                data["q"],
+                data["u_cmd"],
+                lambda q: spatial_jacobian(self.robot_mdl, q),
+            )
+        populate_collector_from_log(
+            self.metrics_collector,
+            data,
+            jerk_dt=None,
+            state_lb=self.robot_mdl.lb_x,
+            state_ub=self.robot_mdl.ub_x,
+            base_mask=self.metrics_controller.mpsf_base_mask,
+            ee_mask=self.metrics_controller.mpsf_ee_mask,
+            commanded_ee_twists=twists,
         )
 
     def _publish_velocity_plan(self, v_cmd, t):
@@ -514,8 +560,15 @@ class DirectTeleopROSNode:
         self._cycle_t0 = time.perf_counter()
 
         while not self.ctrl_c and not rospy.is_shutdown():
-            if self.start_end_button_interface.button == 1:
-                self.start_end_button_interface.reset_button()
+            if (
+                trial_button_action(
+                    waiting=False,
+                    start_latched=self.start_button_interface.button == 1,
+                    end_latched=self.end_button_interface.button == 1,
+                )
+                == "end"
+            ):
+                self.end_button_interface.reset_button()
                 break
 
             cycle_t0 = time.perf_counter()
@@ -530,7 +583,7 @@ class DirectTeleopROSNode:
                 desired_ee_vel,
                 joy_axes,
                 joy_buttons,
-            ) = self._compute_v_cmd()
+            ) = self._compute_v_cmd(cycle_period)
             self._sticks_active_param = bool(enabled)
             rospy.set_param(STICKS_ACTIVE_PARAM, self._sticks_active_param)
             timestamp = rospy.Time.now().to_sec()

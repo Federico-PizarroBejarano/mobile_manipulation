@@ -3,31 +3,70 @@
 
 cylinder:
   - name: "cylinder_1"
-    radius: 0.25
-    length: 0.60
-    xyz: [-2.2, -2.3, 0.30]
+    radius: 0.275
+    length: 0.50
+    xyz: [-2.2, -2.3, 0.25]
     rpy: [0, 0, 0]
 
+  # 2 ft x 2 ft footprint centered at (-1.50, -0.70), covered by a 3x3
+  # cylinder grid with the center cylinder omitted. Radius equals the grid
+  # spacing so the prism corners and the omitted center are both covered.
   - name: "cylinder_2_1"
-    radius: 0.22
-    length: 1.35
-    xyz: [-1.60, -0.80, 0.675]
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.679, -0.879, 0.65]
     rpy: [0, 0, 0]
 
   - name: "cylinder_2_2"
-    radius: 0.22
-    length: 1.35
-    xyz: [-1.40, -0.80, 0.675]
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.500, -0.879, 0.65]
+    rpy: [0, 0, 0]
+
+  - name: "cylinder_2_3"
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.321, -0.879, 0.65]
+    rpy: [0, 0, 0]
+
+  - name: "cylinder_2_4"
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.679, -0.700, 0.65]
+    rpy: [0, 0, 0]
+
+  - name: "cylinder_2_5"
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.321, -0.700, 0.65]
+    rpy: [0, 0, 0]
+
+  - name: "cylinder_2_6"
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.679, -0.521, 0.65]
+    rpy: [0, 0, 0]
+
+  - name: "cylinder_2_7"
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.500, -0.521, 0.65]
+    rpy: [0, 0, 0]
+
+  - name: "cylinder_2_8"
+    radius: 0.179
+    length: 1.3
+    xyz: [-1.321, -0.521, 0.65]
     rpy: [0, 0, 0]
 
   - name: "cylinder_3_1"
-    radius: 0.22
+    radius: 0.24
     length: 0.68
     xyz: [-0.85, -2.50, 0.34]
     rpy: [0, 0, 0]
 
   - name: "cylinder_3_2"
-    radius: 0.22
+    radius: 0.24
     length: 0.68
     xyz: [-0.65, -2.30, 0.34]
     rpy: [0, 0, 0]

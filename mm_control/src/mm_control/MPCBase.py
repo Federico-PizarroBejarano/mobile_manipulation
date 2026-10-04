@@ -87,6 +87,9 @@ class MPCBase:
         self.rbase_bar = None
         self.ee_bar = None
         self.base_bar = None
+        # Debug records the post-solve horizon (collision sweep and predicted poses).
+        # Deploy leaves this False so control() skips that work.
+        self.record_horizon_log = True
 
         self.output_dir = Path(
             parse_ros_path({"package": "mm_control", "path": "acados_outputs"})

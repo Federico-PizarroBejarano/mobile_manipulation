@@ -97,11 +97,12 @@ jstest /dev/input/js0
 ```
 
 Press buttons and note which button number corresponds to which physical button. The button numbers in the code are:
-- Button 2: Start/End experiment (Square / X)
+- Button 2: Start experiment (Square / X)
+- Button 1: End experiment (Circle / B)
 
 ## Joystick Teleop (sim and real robot)
 
-Stick commands are **chassis-relative**: stick forward means robot-forward, strafe left means robot-left (same for EE linear/angular). Nodes rotate those twists into the world frame using the current base yaw before MPC, diff-IK, or RL EE integration.
+Stick translation is **chassis-relative**: stick forward means robot-forward, strafe left means robot-left. EE roll, pitch, and yaw are about the gripper axes. Nodes rotate linear velocity into the world frame using the current base yaw before MPC, diff-IK, or RL EE integration. RL also rotates tool angular velocity into the world frame with the current gripper orientation.
 
 All joystick consumers use **`/bluetooth_teleop/joy`** (deadman relay, Square/Triangle, sticks). Only one process can open `/dev/input/js0` at a time.
 
@@ -181,13 +182,13 @@ Indices are only in `mm_utils/src/mm_utils/teleop_mapping.py`. Change mappings t
 | L2 | LT | Deadman and stick enable — hold past halfway |
 | L1 | LB | Clearpath teleop — **do not hold during mm teleop** |
 | R1 | RB | Clearpath teleop — **do not hold during mm teleop** |
-| Circle | B | Unused |
+| Circle | B | End experiment |
 | Triangle | Y | Toggle gripper open / close |
 | Cross | A | Toggle base ↔ EE (`mpsf`/`direct`; unused in `rl`) |
-| Square | X | Start / stop experiment |
-| Right stick X | Right stick X | EE yaw about vertical (base yaw in base mode) |
-| D-pad L / R | D-pad L / R | EE roll |
-| D-pad up / down | D-pad up / down | EE pitch |
+| Square | X | Start experiment |
+| Right stick X | Right stick X | EE yaw about the gripper (base yaw in base mode) |
+| D-pad L / R | D-pad L / R | EE roll about the gripper |
+| D-pad up / down | D-pad up / down | EE pitch about the gripper |
 
 ### Verify indices
 
@@ -199,11 +200,11 @@ Or `roslaunch mm_run teleop.launch controller_type:=ps4`. If a physical button's
 ### During an experiment
 
 1. Position robot with Clearpath L1/LB + sticks (experiment not running).
-2. Press **Square** or **Enter** to start.
+2. Press **Square** or **Enter** to start. Extra Square presses do not stop the trial.
 3. Hold **left trigger (L2/LT)** and move the sticks. Releasing it stops the motors and ignores the sticks.
 4. Press Cross to toggle base / EE mode (direct EE uses arm-only differential IK; base stays still).
 5. Press **Triangle** to toggle the gripper open / close (normal mode; ignored in sim if the driver is not running).
-6. Press Square again to stop. Release left trigger for an immediate hardware stop.
+6. Press **Circle** to stop. Release left trigger for an immediate hardware stop.
 7. Do not hold L1/R1 (Clearpath).
 
 Stick teleop requires `controller.teleop.enabled: true`. Gate param: `/teleop_sticks_active`. Direct EE IK params live under top-level `ik:` in the experiment YAML (defaults match RL).
@@ -223,7 +224,7 @@ pause before Square/Enter and record `user` + `trial` into `control/data.npz` an
 `control/config.yaml` (see `configuration.md`). Default is off.
 
 Hardware: `record_bag` defaults true. Sim: false unless passed.
-Bag starts on Square/Enter and stops on Square/shutdown.
+Bag starts on Square/Enter and stops on Circle/shutdown.
 
 Launch overrides:
 ```bash

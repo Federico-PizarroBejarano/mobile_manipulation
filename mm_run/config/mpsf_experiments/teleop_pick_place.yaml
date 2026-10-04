@@ -36,9 +36,9 @@ controller:
   cost_params:
     ControlEffort:
       Qva: [0.015, 0.013, 0.011, 0.009, 0.007, 0.005]
-      Qvb: [0.02, 0.02, 0.02]
+      Qvb: [0.05, 0.05, 0.05]
       Qua: [0.015, 0.013, 0.011, 0.009, 0.007, 0.005]
-      Qub: [0.05, 0.05, 0.05]
+      Qub: [0.1, 0.1, 0.1]
 
   low_level_tracking:
     kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
@@ -50,6 +50,13 @@ controller:
     enabled: true
     max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
     max_ee_vel: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
+    # Stick-frame slew [m/s^2, m/s^2, rad/s^2] and EE [m/s^2 x3, rad/s^2 x3].
+    reference_ramp:
+      base: [0.5, 0.5, 0.4]
+      ee: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
+    # 1.0 keeps YAML effort weights. EE mode scales Qvb/Qub; base mode scales Qva/Qua.
+    ee_teleop_strictness: 2.5
+    base_teleop_strictness: 1.0
 
   mpsf_params:
     objective_horizon: 10
@@ -75,7 +82,7 @@ rl:
 simulation:
   duration: 60
   robot:
-    home: [-2.6, -1.25, 1.571, 1.57090235, -1.04724914, 2.09447575, -1.05401260, 1.57079864, 1.28475273]
+    home: [-2.6, -1.25, 1.571, 1.57090235, -1.04724914, 2.09447575, -1.05401260, 1.57079864, -0.25]
 
 include:
   - package: "mm_rl"
@@ -92,4 +99,5 @@ include:
 logging:
   log_dir: "mpsf_experiments/teleop_pick_place"
   log_level: 20
+  profile: deploy
   prompt_trial_metadata: true

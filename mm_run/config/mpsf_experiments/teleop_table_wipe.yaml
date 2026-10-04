@@ -33,12 +33,19 @@ controller:
   collision_safety_margin:
     static_obstacles: 0.04
 
+  collision_constraints_softened:
+    self: False
+    static_obstacles: False
+
   cost_params:
     ControlEffort:
-      Qva: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-      Qvb: [0.015, 0.015, 0.015]
-      Qua: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-      Qub: [0.05, 0.05, 0.05]
+      Qva: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
+      Qvb: [0.2, 0.05, 0.2]
+      Qua: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
+      Qub: [0.2, 0.05, 0.2]
+    EEVel:
+      Qk: [1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+      P:  [1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
 
   low_level_tracking:
     kp: [0, 0, 0, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]
@@ -49,12 +56,19 @@ controller:
   teleop:
     enabled: true
     max_base_vel: [0.3, 0.3, 0.3]  # [vx, vy, vyaw]
-    max_ee_vel: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
+    max_ee_vel: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+    # Stick-frame slew [m/s^2, m/s^2, rad/s^2] and EE [m/s^2 x3, rad/s^2 x3].
+    reference_ramp:
+      base: [0.35, 0.35, 0.2]
+      ee: [0.75, 0.75, 0.75, 1.0, 1.0, 1.0]
+    # 1.0 keeps YAML effort weights. EE mode scales Qvb/Qub; base mode scales Qva/Qua.
+    ee_teleop_strictness: 10.0
+    base_teleop_strictness: 1.0
 
   mpsf_params:
     objective_horizon: 10
-    decay_rate: 0.85
-    mpsf_weight_multiplier: 1.0
+    decay_rate: 0.95
+    mpsf_weight_multiplier: 15.0
     mpsf_base_mask: [true, true, true]
     mpsf_ee_mask: [true, true, true, true, true, true]
 
@@ -67,7 +81,7 @@ controller:
 # Differential IK for direct / rl EE mode (ignored by mpsf).
 ik:
   use_weighted_regularization: true
-  regularization_strength: 0.1
+  regularization_strength: 0.01
 
 rl:
   checkpoint: "checkpoints/final_model.pth"
@@ -92,7 +106,9 @@ include:
 logging:
   log_dir: "mpsf_experiments/teleop_table_wipe"
   log_level: 20
-  prompt_trial_metadata: true
+  # debug keeps the MPC horizon dump. deploy skips it and runs the control loop faster.
+  profile: deploy
+  prompt_trial_metadata: True
   # Independent wipe polylines (world frame). Table-to-table transitions are not scored.
   path_coverage:
     # Waypoints are compared to the logged EE frame origin (not the pad tip);
@@ -109,7 +125,7 @@ logging:
           - [1.41, -1.46, 0.78]
       - name: table2
         waypoints:
-          - [1.38, -1.67, 0.95]
-          - [0.96, -1.93, 0.95]
-          - [1.41, -2.21, 0.95]
-          - [1.10, -2.48, 0.95]
+          - [1.25, -1.77, 0.95]
+          - [0.90, -2.06, 0.95]
+          - [1.39, -2.34, 0.95]
+          - [0.93, -2.60, 0.95]

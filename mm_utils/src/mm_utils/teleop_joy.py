@@ -26,6 +26,13 @@ TELEOP_DEFAULTS = {
     "max_ee_vel": [0.12, 0.12, 0.12, 0.25, 0.25, 0.25],
 }
 
+# Per-axis slew of the stick reference. Base is [vx, vy, vyaw] in m/s^2, m/s^2,
+# rad/s^2. EE is [vx, vy, vz, wx, wy, wz] in m/s^2 and rad/s^2.
+REFERENCE_RAMP_DEFAULTS = {
+    "base": [1.0, 1.0, 1.0],
+    "ee": [1.0, 1.0, 1.0, 1.5, 1.5, 1.5],
+}
+
 GOAL_VELOCITY_DEFAULTS = {
     "max_base_vel": [0.3, 0.3, 0.3],
     "max_ee_vel": [0.15, 0.15, 0.15, 0.3, 0.3, 0.3],
@@ -46,31 +53,30 @@ def chassis_base_twist_to_world(v_chassis, yaw):
     return body_twist_to_world(v_chassis, float(yaw))
 
 
-def teleop_ee_twist_for_control(twist_teleop, yaw, R_ee_wb):
+def teleop_ee_twist_for_control(twist_teleop, yaw):
     """Map teleop EE twist to spatial-Jacobian / MPC ``EEVel`` convention.
 
-    ``twist_teleop`` is ``[vx, vy, vz, wx, wy, wz]`` with linear and angular
-    velocity in the chassis frame (stick yaw about vertical, d-pad pitch/roll
-    about chassis axes). Returns world-frame linear velocity and EE-body
-    angular velocity (matching the tool spatial Jacobian and MPC ``EEVel``).
+    ``twist_teleop`` is ``[vx, vy, vz, wx, wy, wz]`` with linear velocity in the
+    chassis frame and angular velocity in the tool frame (right stick X → yaw
+    about the gripper, d-pad pitch/roll about gripper axes). Returns world-frame
+    linear velocity and the same tool-frame angular velocity (matching the tool
+    spatial Jacobian and MPC ``EEVel``).
+    """
+    tw = np.asarray(twist_teleop, dtype=float).reshape(6)
+    rot = _planar_yaw_rotation(float(yaw))
+    return np.concatenate([rot @ tw[:3], tw[3:]])
+
+
+def teleop_ee_twist_to_world(twist_teleop, yaw, R_ee_wb):
+    """Map teleop EE twist to a full world-frame twist.
+
+    Linear velocity is chassis→world via planar yaw. Angular velocity is
+    tool→world via ``R_ee_wb``.
     """
     tw = np.asarray(twist_teleop, dtype=float).reshape(6)
     rot = _planar_yaw_rotation(float(yaw))
     R = np.asarray(R_ee_wb, dtype=float).reshape(3, 3)
-    lin_w = rot @ tw[:3]
-    ang_w = rot @ tw[3:]
-    return np.concatenate([lin_w, R.T @ ang_w])
-
-
-def teleop_ee_twist_to_world(twist_teleop, yaw, R_ee_wb=None):
-    """Map teleop EE twist to a full world-frame twist.
-
-    Linear and angular parts are chassis→world via planar yaw. ``R_ee_wb`` is
-    accepted for call-site compatibility and ignored.
-    """
-    tw = np.asarray(twist_teleop, dtype=float).reshape(6)
-    rot = _planar_yaw_rotation(float(yaw))
-    return np.concatenate([rot @ tw[:3], rot @ tw[3:]])
+    return np.concatenate([rot @ tw[:3], R @ tw[3:]])
 
 
 def ee_yaw_from_buttons(buttons, left_idx, right_idx):
@@ -116,9 +122,10 @@ def axes_to_base_velocity(joy_axes, max_base_vel):
 def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel):
     """Map joy axes + d-pad buttons to teleop EE twist.
 
-    Returns ``[vx, vy, vz, wx, wy, wz]`` in the chassis frame (right stick X →
-    yaw about vertical, d-pad up/down → pitch, d-pad left/right → roll). Callers
-    must convert with :func:`teleop_ee_twist_for_control` (MPC / spatial IK) or
+    Returns ``[vx, vy, vz, wx, wy, wz]``. Linear velocity is chassis-frame;
+    angular velocity is tool-frame (right stick X → yaw about the gripper,
+    d-pad up/down → pitch, d-pad left/right → roll). Callers must convert with
+    :func:`teleop_ee_twist_for_control` (MPC / spatial IK) or
     :func:`teleop_ee_twist_to_world` (world-frame consumers).
     """
     joy_axes = np.asarray(joy_axes, dtype=float).reshape(-1)
@@ -130,12 +137,63 @@ def axes_to_ee_velocity(joy_axes, buttons, max_ee_vel):
             joy_axes[1] * max_ee_vel[0],
             joy_axes[0] * max_ee_vel[1],
             joy_axes[3] * max_ee_vel[2],
-            -joy_wx * max_ee_vel[3],
-            joy_wy * max_ee_vel[4],
+            joy_wx * max_ee_vel[3],
+            -joy_wy * max_ee_vel[4],
             joy_axes[EE_YAW_AXIS] * max_ee_vel[5],
         ],
         dtype=float,
     )
+
+
+def slew_toward(current, target, max_rate, dt):
+    """Move ``current`` toward ``target`` by at most ``max_rate * dt`` per axis.
+
+    ``max_rate`` is the absolute rate limit, same shape as ``current`` and
+    ``target``. A very large rate leaves the step unchanged.
+    """
+    current = np.asarray(current, dtype=float).reshape(-1)
+    target = np.asarray(target, dtype=float).reshape(-1)
+    max_rate = np.abs(np.asarray(max_rate, dtype=float).reshape(-1))
+    if current.shape != target.shape or max_rate.shape != current.shape:
+        raise ValueError(
+            "slew_toward shapes must match, got "
+            f"current {current.shape}, target {target.shape}, rate {max_rate.shape}"
+        )
+    dt = float(dt)
+    if dt < 0.0:
+        raise ValueError(f"dt must be non-negative, got {dt}")
+    step = max_rate * dt
+    delta = np.clip(target - current, -step, step)
+    return current + delta
+
+
+class TeleopTwistRamp:
+    """Slew stick-frame base and EE twists between control cycles.
+
+    Apply this before the chassis-to-world / tool-frame conversion so a yaw
+    change rotates an already-ramped forward command.
+    """
+
+    def __init__(self, max_base_rate, max_ee_rate):
+        self.max_base_rate = np.asarray(max_base_rate, dtype=float).reshape(3)
+        self.max_ee_rate = np.asarray(max_ee_rate, dtype=float).reshape(6)
+        self._base = np.zeros(3, dtype=float)
+        self._ee = np.zeros(6, dtype=float)
+
+    def reset(self):
+        """Snap both channels to zero (deadman release or base/EE toggle)."""
+        self._base[:] = 0.0
+        self._ee[:] = 0.0
+
+    def base(self, target, dt):
+        """Ramp a chassis-frame base twist ``[vx, vy, vyaw]``. Returns a copy."""
+        self._base = slew_toward(self._base, target, self.max_base_rate, dt)
+        return self._base.copy()
+
+    def ee(self, target, dt):
+        """Ramp a teleop EE twist ``[vx, vy, vz, wx, wy, wz]``. Returns a copy."""
+        self._ee = slew_toward(self._ee, target, self.max_ee_rate, dt)
+        return self._ee.copy()
 
 
 def joint_velocity_command(mode, base_vel, ee_vel, nu):
@@ -153,6 +211,69 @@ def joint_velocity_command(mode, base_vel, ee_vel, nu):
     return cmd
 
 
+# ControlEffort parameter order used by MPC._set_control_effort_params.
+CONTROL_EFFORT_NAMES = ("Qqa", "Qqb", "Qva", "Qvb", "Qua", "Qub")
+_EE_EFFORT_SCALE = frozenset({"Qvb", "Qub"})
+_BASE_EFFORT_SCALE = frozenset({"Qva", "Qua"})
+
+
+def _nonnegative_strictness(section, key):
+    value = float(section.get(key, 1.0))
+    if value < 0.0:
+        raise ValueError(f"controller.teleop.{key} must be >= 0, got {value}")
+    return value
+
+
+def scale_teleop_control_effort(values, mode, ee_strictness, base_strictness):
+    """Scale base or arm effort weights for the active teleop mode.
+
+    ``values`` is the nominal ControlEffort vector in ``CONTROL_EFFORT_NAMES``
+    order. ``mode is None`` returns copies of those values. EE mode multiplies
+    ``Qvb`` and ``Qub`` by ``ee_strictness``. Base mode multiplies ``Qva`` and
+    ``Qua`` by ``base_strictness``. The input arrays are not modified.
+    """
+    values = [np.asarray(v, dtype=float) for v in values]
+    if len(values) != len(CONTROL_EFFORT_NAMES):
+        raise ValueError(
+            f"expected {len(CONTROL_EFFORT_NAMES)} effort weights, got {len(values)}"
+        )
+    ee_strictness = float(ee_strictness)
+    base_strictness = float(base_strictness)
+    if ee_strictness < 0.0 or base_strictness < 0.0:
+        raise ValueError(
+            "teleop strictness must be >= 0, got "
+            f"ee={ee_strictness}, base={base_strictness}"
+        )
+    if mode is None:
+        return [v.copy() for v in values]
+    if mode == "ee":
+        scale_names = _EE_EFFORT_SCALE
+        scale = ee_strictness
+    elif mode == "base":
+        scale_names = _BASE_EFFORT_SCALE
+        scale = base_strictness
+    else:
+        raise ValueError(
+            f"teleop effort mode must be 'base', 'ee', or None, got {mode}"
+        )
+
+    scaled = []
+    for name, value in zip(CONTROL_EFFORT_NAMES, values):
+        scaled.append(value * scale if name in scale_names else value.copy())
+    return scaled
+
+
+def _reference_ramp_rates(section):
+    """Per-axis stick slew limits from ``controller.teleop.reference_ramp``."""
+    ramp = section.get("reference_ramp") or {}
+    return {
+        "base": np.asarray(
+            ramp.get("base", REFERENCE_RAMP_DEFAULTS["base"]), dtype=float
+        ),
+        "ee": np.asarray(ramp.get("ee", REFERENCE_RAMP_DEFAULTS["ee"]), dtype=float),
+    }
+
+
 def parse_teleop_config(controller_config=None):
     """Parse ``controller.teleop`` stick/deadman settings."""
     controller_config = controller_config or {}
@@ -164,6 +285,13 @@ def parse_teleop_config(controller_config=None):
         ),
         "max_ee_vel": np.asarray(
             section.get("max_ee_vel", TELEOP_DEFAULTS["max_ee_vel"]), dtype=float
+        ),
+        "reference_ramp": _reference_ramp_rates(section),
+        "ee_teleop_strictness": _nonnegative_strictness(
+            section, "ee_teleop_strictness"
+        ),
+        "base_teleop_strictness": _nonnegative_strictness(
+            section, "base_teleop_strictness"
         ),
     }
 

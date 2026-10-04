@@ -48,10 +48,18 @@ from mm_utils.robotiq_gripper import (
     seed_gripper_mode_position,
     toggle_gripper_open,
 )
+from mm_utils.teleop_mapping import (
+    END_TRIAL_BUTTON,
+    START_TRIAL_BUTTON,
+    trial_button_action,
+)
 from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     append_teleop_sample,
+    apply_logging_profile,
+    apply_teleop_backend,
     clear_experiment_timestamp,
+    logging_profile,
     maybe_prompt_trial_metadata,
     resolve_experiment_timestamp,
     session_root,
@@ -103,6 +111,7 @@ class ControllerROSNode:
             )
 
         self.ctrl_config = config["controller"]
+        self._deploy_logging = logging_profile(config) == "deploy"
         self.simulation_timestep = float(config["simulation"]["timestep"])
         self.planner_config = config.get("planner", {}).copy()
         print(self.ctrl_config["type"])
@@ -112,6 +121,7 @@ class ControllerROSNode:
             raise ValueError(f"Unknown controller type: {self.ctrl_config['type']}")
 
         self.controller = control_class(self.ctrl_config)
+        self.controller.record_horizon_log = not self._deploy_logging
 
         self._mpc_loop_hz = float(self.ctrl_config["ctrl_rate"])
         if self._mpc_loop_hz <= 0.0:
@@ -131,6 +141,10 @@ class ControllerROSNode:
 
         # init logger
         self.logger = DataLogger(copy.deepcopy(config), name="control")
+        apply_logging_profile(
+            self.logger, "deploy" if self._deploy_logging else "debug"
+        )
+        apply_teleop_backend(self.logger, "none")
 
         self.logger.add("sim_timestep", config["simulation"]["timestep"])
         self.logger.add("duration", config["simulation"]["duration"])
@@ -164,7 +178,8 @@ class ControllerROSNode:
             self.ctrl_config["robot"]["tool_vicon_name"]
         )
 
-        self.start_end_button_interface = JoystickButtonInterface(2)  # square
+        self.start_button_interface = JoystickButtonInterface(START_TRIAL_BUTTON)
+        self.end_button_interface = JoystickButtonInterface(END_TRIAL_BUTTON)
         # Triangle/Y: raw rising-edge (JoystickButtonInterface re-fires while held).
         self._gripper_btn = 0
         self._gripper_btn_prev = 0
@@ -194,8 +209,9 @@ class ControllerROSNode:
         self.self_collision_func = mi.getSignedDistanceSymMdls("self")
         self.ground_collision_func = mi.getSignedDistanceSymMdls("ground")
         self._estop_margin = float(self.ctrl_config["collision_estop_margin"])
-        self._viz_enabled = bool(
-            self.ctrl_config.get("ros_visualization_enabled", True)
+        self._viz_enabled = (
+            bool(self.ctrl_config.get("ros_visualization_enabled", True))
+            and not self._deploy_logging
         )
         self._viz_rate = float(self.ctrl_config.get("ros_visualization_rate", 5.0))
         self._use_sim_time = bool(rospy.get_param("/use_sim_time", False))
@@ -276,14 +292,17 @@ class ControllerROSNode:
         clear_experiment_timestamp()
 
     def _sync_session_timestamp(self):
-        """Re-read shared stamp (sim may set it after our __init__)."""
+        """Re-read shared stamp (sim may set it after our __init__).
+
+        Always rebinds the bag path so a user folder applied during the start
+        prompt is included even when the timestamp itself did not change.
+        """
         ts = resolve_experiment_timestamp(create=True)
-        if ts == self.session_timestamp:
-            return
-        rospy.loginfo(
-            "Adopting experiment timestamp %s (was %s)", ts, self.session_timestamp
-        )
-        self.session_timestamp = ts
+        if ts != self.session_timestamp:
+            rospy.loginfo(
+                "Adopting experiment timestamp %s (was %s)", ts, self.session_timestamp
+            )
+            self.session_timestamp = ts
         self.bag_recorder.session_root = session_root(
             self.logger.base_directory, self.session_timestamp
         )
@@ -614,6 +633,8 @@ class ControllerROSNode:
         self.sot_lock.release()
 
     def _publish_mpc_data(self, controller):
+        if controller.ee_bar is None or controller.base_bar is None:
+            return
         # ee prediction
         marker_ee = self._make_marker(
             Marker.POINTS, 0, rgba=[1.0, 1.0, 1.0, 1], scale=[0.1, 0.1, 0.1]
@@ -728,7 +749,7 @@ class ControllerROSNode:
             )
 
         print("-----Checking Joy stick messages----- ")
-        if self.start_end_button_interface.ready():
+        if self.start_button_interface.ready():
             print("Received joystick msg on /bluetooth_teleop/joy.")
         else:
             print("No joystick msg yet (Square/Triangle optional if it appears later).")
@@ -767,9 +788,10 @@ class ControllerROSNode:
             t = rospy.Time.now().to_sec()
 
             # Match experiment.py: one line per control tick (MPC + ROS overhead).
-            print(
-                f"-------------- {(t - t0):.3f}s/{float(self.sim_duration):.3f}s ------------------"
-            )
+            if not self._deploy_logging:
+                print(
+                    f"-------------- {(t - t0):.3f}s/{float(self.sim_duration):.3f}s ------------------"
+                )
 
             # open-loop command
             q_raw, v_raw = self.robot_interface.q, self.robot_interface.v
@@ -805,7 +827,7 @@ class ControllerROSNode:
             )
             self.sot_lock.release()
 
-            self.update_references(references, robot_states)
+            self.update_references(references, robot_states, cycle_period)
             robot_states = self._apply_idle_base_velocity_gate(robot_states, references)
 
             tc1 = time.perf_counter()
@@ -920,7 +942,8 @@ class ControllerROSNode:
                 cycle_period=cycle_period,
                 **teleop_fields,
             )
-            self.log_mpc_info(self.logger, self.controller)
+            if self.controller.record_horizon_log:
+                self.log_mpc_info(self.logger, self.controller)
             self.logger.append("controller_run_time", tc2 - tc1)
             r_ew_wd = None
             r_bw_wd = None
@@ -968,15 +991,22 @@ class ControllerROSNode:
                     self.logger.append("ω_bw_w_ds", v_bw_wd[2])
 
             self._poll_gripper_toggle()
-            if self.start_end_button_interface.button == 1:
-                self.start_end_button_interface.reset_button()
+            if (
+                trial_button_action(
+                    waiting=False,
+                    start_latched=self.start_button_interface.button == 1,
+                    end_latched=self.end_button_interface.button == 1,
+                )
+                == "end"
+            ):
+                self.end_button_interface.reset_button()
                 break
 
             self._end_mpc_cycle(cycle_t0, mpc_period, rate)
 
         self.bag_recorder.stop()
-        # Square (or loop exit) must flush the control log before metrics/path
-        # coverage run; shutdownhook alone is too late for a clean Square stop.
+        # Circle (or loop exit) must flush the control log before metrics/path
+        # coverage run; shutdownhook alone is too late for a clean Circle stop.
         try:
             self.logger.save(session_timestamp=self.session_timestamp)
         except Exception as exc:
@@ -985,15 +1015,17 @@ class ControllerROSNode:
     def _wait_for_start(self, rate):
         """Start on Square (controller) and/or Enter when a TTY is available.
 
-        Non-interactive (no TTY): wait for Square if joy is already publishing,
-        otherwise start immediately so CI/sim without a pad does not hang.
+        Circle ends a running trial. Non-interactive (no TTY): wait for Square
+        if joy is already publishing, otherwise start immediately so CI/sim
+        without a pad does not hang.
         """
         maybe_prompt_trial_metadata(self.logger)
-        self.start_end_button_interface.reset_button()
+        self.start_button_interface.reset_button()
+        self.end_button_interface.reset_button()
         enter_pressed = threading.Event()
 
         if sys.stdin.isatty():
-            print("----- Press Square (controller) or Enter to start -----")
+            print("----- Press Square or Enter to start. Circle ends the trial. -----")
 
             def _wait_enter():
                 try:
@@ -1003,21 +1035,30 @@ class ControllerROSNode:
                     pass
 
             threading.Thread(target=_wait_enter, daemon=True).start()
-        elif self.start_end_button_interface.ready():
-            print("----- Press Square (controller) to start -----")
+        elif self.start_button_interface.ready():
+            print("----- Press Square to start. Circle ends the trial. -----")
         else:
             print("----- Non-interactive start: skipping prompt -----")
             return
 
         while not self.ctrl_c and not rospy.is_shutdown():
-            if self.start_end_button_interface.button == 1:
-                self.start_end_button_interface.reset_button()
+            if (
+                trial_button_action(
+                    waiting=True,
+                    start_latched=self.start_button_interface.button == 1,
+                    end_latched=self.end_button_interface.button == 1,
+                )
+                == "start"
+            ):
+                self.start_button_interface.reset_button()
+                self.end_button_interface.reset_button()
                 return
             if enter_pressed.is_set():
+                self.end_button_interface.reset_button()
                 return
             rospy.loginfo_throttle(
                 5.0,
-                "Waiting for Square (button 2) or Enter to start ...",
+                "Waiting for Square or Enter to start ...",
             )
             rate.sleep()
 
@@ -1127,12 +1168,13 @@ class ControllerROSNode:
         for key, val in controller.log.items():
             logger.append("_".join(["mpc", key]) + "s", val)
 
-    def update_references(self, references, robot_states):
+    def update_references(self, references, robot_states, cycle_period):
         """Update the references for the controller.
 
         Args:
             references (dict): The references to update.
             robot_states (tuple): The robot states.
+            cycle_period (float): Wall time since the previous control cycle [s].
         """
         pass
 
