@@ -49,6 +49,12 @@ controller:
     enabled: true
     eps_align: 2e-2
 
+  # Freeze the arm when gripper yaw would drive the camera-side cables into
+  # the link between wrist 1 and wrist 2. Other experiments leave this off.
+  gripper_cable_guard:
+    enabled: true
+    release_margin_rad: 0.14
+
   teleop:
     enabled: true
     max_base_vel: [0.5, 0.5, 0.5]  # [vx, vy, vyaw]
@@ -71,8 +77,16 @@ controller:
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
 
+  robot:
+    limits:
+      state:
+        lower: [ -2.7, -3, -2pi, -1pi, -1pi, -1pi, -1pi, -1pi, -1pi,
+                  -0.7, -0.7, -0.4, -1.5, -1.5, -2.0, -2.0, -2.0, -2.0 ]
+        upper: [ 3, 3, 2pi, 1pi, 1pi, 1pi, 1pi, 2.68, 1pi,
+                  0.7, 0.7, 0.4, 1.5, 1.5, 2.0, 2.0, 2.0, 2.0 ]
+
   acados:
-    name: "MPSF_Teleop_Tray"
+    name: "MPSF_Teleop_Tray_Safe2"
 
 # Differential IK for direct EE mode (ignored by mpsf).
 ik:

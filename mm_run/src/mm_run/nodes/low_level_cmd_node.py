@@ -14,6 +14,11 @@ from std_msgs.msg import Float64MultiArray
 from mm_control.robot import MobileManipulator3D
 from mm_run.msg import MpcPlan
 from mm_utils import parsing
+from mm_utils.gripper_cable_guard import (
+    CABLE_GUARD_ENABLED_PARAM,
+    CABLE_GUARD_RELEASE_PARAM,
+    DEFAULT_RELEASE_MARGIN_RAD,
+)
 from mm_utils.mpc_plan_tracking import (
     apply_replan_continuity,
     build_plan_interpolators,
@@ -58,6 +63,14 @@ class LowLevelCmdNode:
             config = parsing.recursive_dict_update(config, planner_overlay)
 
         self.ctrl_config = config["controller"]
+        guard_cfg = self.ctrl_config.get("gripper_cable_guard") or {}
+        rospy.set_param(
+            CABLE_GUARD_ENABLED_PARAM, bool(guard_cfg.get("enabled", False))
+        )
+        rospy.set_param(
+            CABLE_GUARD_RELEASE_PARAM,
+            float(guard_cfg.get("release_margin_rad", DEFAULT_RELEASE_MARGIN_RAD)),
+        )
         self.sim_dt = float(config["simulation"]["timestep"])
         self._mpc_dt_cfg = float(self.ctrl_config["dt"])
         self.cmd_vel_type = self.ctrl_config["cmd_vel_type"]

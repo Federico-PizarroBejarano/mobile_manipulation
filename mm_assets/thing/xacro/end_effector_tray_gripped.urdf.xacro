@@ -7,7 +7,7 @@
   <xacro:property name="tray_disk_radius" value="0.2065"/>
   <xacro:property name="tray_height" value="0.076"/>
   <!-- sqrt(R^2 + (H/2)^2) for R=0.2065, H=0.076 -->
-  <xacro:property name="tray_collision_radius" value="0.210"/>
+  <xacro:property name="tray_collision_radius" value="0.18"/>
 
   <joint name="gripped_object_joint" type="fixed">
     <xacro:transformed_origin name="gripped_object_transform" />
