@@ -77,14 +77,6 @@ controller:
   self_collision_avoidance_enabled: True
   static_obstacles_collision_avoidance_enabled: True
 
-  robot:
-    limits:
-      state:
-        lower: [ -2.7, -3, -2pi, -1pi, -1pi, -1pi, -1pi, -1pi, -1pi,
-                  -0.7, -0.7, -0.4, -1.5, -1.5, -2.0, -2.0, -2.0, -2.0 ]
-        upper: [ 3, 3, 2pi, 1pi, 1pi, 1pi, 1pi, 2.68, 1pi,
-                  0.7, 0.7, 0.4, 1.5, 1.5, 2.0, 2.0, 2.0, 2.0 ]
-
   acados:
     name: "MPSF_Teleop_Tray_Safe2"
 
