@@ -350,6 +350,9 @@ def test_apply_teleop_backend(tmp_path):
     apply_teleop_backend(logger, "direct")
     assert logger.data["teleop_backend"] == "direct"
     assert logger.config["logging"]["teleop_backend"] == "direct"
+    apply_teleop_backend(logger, "act")
+    assert logger.data["teleop_backend"] == "act"
+    assert logger.config["logging"]["teleop_backend"] == "act"
 
 
 def test_apply_teleop_backend_rejects_invalid(tmp_path):

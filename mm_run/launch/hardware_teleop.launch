@@ -2,14 +2,15 @@
 <!-- Hardware teleop: plan node + low_level on the real robot.
      Requires thing.launch (robot + joy_stick_relay) already running unless launch_robot:=true.
      Joy defaults off: lab bringup already publishes /bluetooth_teleop/joy.
-     teleop:=mpsf (default), direct, or rl. -->
+     teleop:=mpsf (default), direct, rl, or act. -->
 
 <launch>
   <arg name="config" doc="Experiment config YAML"/>
   <arg name="ctrl_config" default="default"/>
   <arg name="planner_config" default="default"/>
   <arg name="logging_sub_folder" default="default"/>
-  <arg name="teleop" default="mpsf" doc="mpsf, direct, or rl"/>
+  <arg name="teleop" default="mpsf" doc="mpsf, direct, rl, or act"/>
+  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act"/>
   <arg name="controller_type" default="ps4" doc="ps4 or xbox (only used if joystick:=true)"/>
   <arg name="joy_dev" default="$(optenv RIDGEBACK_JOY_DEVICE /dev/input/js0)"/>
   <arg name="joystick" default="false" doc="start mm_run joy_node; leave false if /bluetooth_teleop/joy already exists"/>
@@ -31,6 +32,7 @@
     <arg name="planner_config" value="$(arg planner_config)"/>
     <arg name="logging_sub_folder" value="$(arg logging_sub_folder)"/>
     <arg name="teleop" value="$(arg teleop)"/>
+    <arg name="act_checkpoint" value="$(arg act_checkpoint)"/>
     <arg name="record_bag" value="$(arg record_bag)"/>
     <arg name="bag_all" value="$(arg bag_all)"/>
   </include>

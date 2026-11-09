@@ -262,7 +262,7 @@ class TestParseTeleopConfig:
 
     def test_teleop_mode_constants(self):
         assert TELEOP_MODE_PARAM == "/mm_run/teleop_mode"
-        assert VALID_TELEOP_MODES == ("none", "mpsf", "direct", "rl")
+        assert VALID_TELEOP_MODES == ("none", "mpsf", "direct", "rl", "act")
 
     def test_reference_ramp_defaults_and_override(self):
         cfg = parse_teleop_config({})

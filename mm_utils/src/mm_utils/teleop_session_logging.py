@@ -188,6 +188,8 @@ def mode_to_int(mode):
         return 1
     if mode == "rl":
         return 2
+    if mode == "act":
+        return 3
     return -1
 
 
@@ -251,7 +253,7 @@ def apply_trial_metadata(logger, user, trial):
 
 
 VALID_LOGGING_PROFILES = ("debug", "deploy")
-VALID_TELEOP_BACKENDS = ("none", "mpsf", "direct", "rl")
+VALID_TELEOP_BACKENDS = ("none", "mpsf", "direct", "rl", "act")
 
 
 def logging_profile(config):
