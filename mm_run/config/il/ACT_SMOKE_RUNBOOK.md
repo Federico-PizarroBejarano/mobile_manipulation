@@ -9,11 +9,10 @@ cd /home/federico/catkin_ws/src/mobile_manipulation
 ## IL environment setup
 
 Keep LeRobot and its ML dependencies outside the catkin Python environment.
+Use the `mm-il` conda env (Python ≥3.10), or an equivalent venv:
 
 ```bash
-python3 -m venv .venv-il
-source .venv-il/bin/activate
-python -m pip install --upgrade pip
+conda activate mm-il   # or: source .venv-il/bin/activate
 python -m pip install -r mm_run/requirements-il.txt
 python -c "import lerobot, torch; print(lerobot.__version__, torch.__version__)"
 ```
@@ -21,11 +20,18 @@ python -c "import lerobot, torch; print(lerobot.__version__, torch.__version__)"
 `mm_run/requirements-il.txt` pins `lerobot>=0.4.0,<0.5` (needed for
 `LeRobotDataset.finalize` and checkpoint pre/post-processors). The training
 `N_ACTION_STEPS` (default 25) must match the node's `--n-action-steps` (default
-25); `CHUNK_SIZE` defaults to 50. Before the first simulation or hardware
-deployment, confirm the installed LeRobot version. Verify that
-`mm_utils/src/mm_utils/act_policy_runtime.py`'s `_predict_chunk` behavior and the
-training CLI flags match that exact installation (`lerobot-train --help` and the
-installed `ACTPolicy` API). Do not assume compatibility across LeRobot releases.
+25); `CHUNK_SIZE` defaults to 50. Confirm the installed LeRobot version before
+deploy (`lerobot-train --help` and the installed `ACTPolicy` API).
+
+State-only export writes joint `q` to both `observation.state` and
+`observation.environment_state` (LeRobot ACT 0.4 requires env_state for config
+validation but still reads `observation.state` in the VAE forward path). Re-export
+the dataset after changing feature keys.
+
+Deploy architecture: `act_teleop_ros.py` stays on ROS Noetic (system Python
+3.8). It spawns `python -m mm_utils.act_policy_worker` under
+`MM_IL_PYTHON` (default `~/miniconda3/envs/mm-il/bin/python`) for checkpoint
+load and action-chunk inference.
 
 ## Operator checklist
 
@@ -66,15 +72,23 @@ python mm_run/src/mm_run/scripts/export_teleop_to_lerobot.py \
 
 ### Step 3: Launch PyBullet with ACT — operator must run
 
-- [ ] Source the catkin workspace and ensure the runtime can import the verified
-      LeRobot installation.
+- [ ] Use a **local** ROS master (lab robot URI will hang). Before launch:
+
+```bash
+conda deactivate   # keep roslaunch on system Python
+source /opt/ros/noetic/setup.bash
+source ~/catkin_ws/devel/setup.bash
+# Ensure ROS_MASTER_URI=http://localhost:11311 and ROS_IP/ROS_HOSTNAME
+# are unset or local (bashrc may already do this for sim).
+```
+
 - [ ] Launch the simulator with ACT:
 
 ```bash
 roslaunch mm_run run_pybullet_sim.launch \
-  config:=/path/to/table_wipe_config.yaml \
+  config:="$(rospack find mm_run)/config/mpsf_experiments/teleop_table_wipe.yaml" \
   teleop:=act \
-  act_checkpoint:=/path/to/outputs/act_table_wipe_smoke/checkpoints/last/pretrained_model \
+  act_checkpoint:="$(pwd)/mm_run/results/il/outputs/act_table_wipe_smoke/checkpoints/last/pretrained_model" \
   gui:=true
 ```
 

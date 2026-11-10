@@ -4,8 +4,8 @@
 Requires the IL env (see mm_run/requirements-il.txt):
   python export_teleop_to_lerobot.py --root /path/to/results/user --out /path/to/lerobot_ds --repo-id local/table_wipe_act_smoke
 
-Run export and training inside this environment. ROS nodes may use the same
-environment if it also has rospy, or call inference from a subprocess later.
+Run export and training in the IL env. Deploy keeps ROS on system Python and
+runs ACT inference via ``mm_utils.act_policy_worker`` under that same IL env.
 """
 
 from __future__ import annotations
@@ -19,12 +19,17 @@ import numpy as np
 
 from mm_utils.il_episode import extract_episode, find_control_npzs
 
+# LeRobot ACT 0.4 validates that env_state (or images) exist, but the VAE
+# forward path still indexes observation.state for device/tokens. Export q as
+# both keys (same vector) for a state-only joint policy.
+_Q_FEATURE = {
+    "dtype": "float32",
+    "shape": (9,),
+    "names": None,
+}
 FEATURES = {
-    "observation.environment_state": {
-        "dtype": "float32",
-        "shape": (9,),
-        "names": None,
-    },
+    "observation.state": dict(_Q_FEATURE),
+    "observation.environment_state": dict(_Q_FEATURE),
     "action": {
         "dtype": "float32",
         "shape": (9,),
@@ -82,7 +87,13 @@ def main(argv=None):
 
     # Single fps for the dataset: median of per-episode fps
     fps = int(np.median(np.asarray(fps_votes, dtype=float)))
-    args.out.mkdir(parents=True, exist_ok=True)
+    # LeRobotDataset.create requires a non-existent root (exist_ok=False).
+    if args.out.exists():
+        raise SystemExit(
+            f"output dataset path already exists: {args.out}\n"
+            "Remove it or choose a new --out, then re-run."
+        )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
         fps=fps,
@@ -95,9 +106,11 @@ def main(argv=None):
     provenance = []
     for path, ep in episodes:
         for i in range(ep["n_frames"]):
+            q_i = ep["q"][i]
             dataset.add_frame(
                 {
-                    "observation.environment_state": ep["q"][i],
+                    "observation.state": q_i,
+                    "observation.environment_state": q_i,
                     "action": ep["u_cmd"][i],
                     "task": args.task,
                 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import copy
 import os
 import sys
@@ -25,7 +26,7 @@ from scipy.spatial.transform import Rotation as Rot
 from mm_control.robot import MobileManipulator3D
 from mm_run.msg import MpcPlan
 from mm_utils import parsing
-from mm_utils.act_policy_runtime import ActChunkRunner
+from mm_utils.act_policy_runtime import ActChunkRunner, ActPolicySubprocess
 from mm_utils.diff_ik import spatial_jacobian
 from mm_utils.logging import DataLogger
 from mm_utils.metrics import MPSFMetricsCollector, populate_collector_from_log
@@ -135,26 +136,12 @@ class ActTeleopROSNode:
         self._sticks_active_param = True
         self.ctrl_c = False
 
-        # Lazy import: lerobot/torch are only needed on the IL env for this node.
-        try:
-            from lerobot.policies.act.modeling_act import ACTPolicy
-            from lerobot.policies.factory import make_pre_post_processors
-        except ImportError as exc:
-            raise ImportError(
-                "act_teleop_ros requires lerobot>=0.4 (ACTPolicy and "
-                "make_pre_post_processors) and torch on this node's Python "
-                "(run from the IL environment)"
-            ) from exc
-        import torch
-
-        self._torch = torch
-        self.policy = ACTPolicy.from_pretrained(args.checkpoint)
-        self.policy.eval()
-        self.preprocessor, self.postprocessor = make_pre_post_processors(
-            self.policy.config, pretrained_path=args.checkpoint
-        )
+        # Policy inference runs under mm-il (Python >=3.10); this ROS node stays
+        # on Noetic's system Python 3.8 so pinocchio/casadi keep working.
+        self._policy = ActPolicySubprocess(args.checkpoint, nu=self.nu)
+        atexit.register(self._policy.close)
         self.runner = ActChunkRunner(
-            self._predict_chunk, n_action_steps=int(args.n_action_steps)
+            self._policy.predict_chunk, n_action_steps=int(args.n_action_steps)
         )
 
         self.robot_interface = MobileManipulatorROSInterface()
@@ -352,23 +339,6 @@ class ActTeleopROSNode:
             "Gripper %s (Triangle/Y)",
             "open" if self._gripper_open else "closed",
         )
-
-    def _predict_chunk(self, q: np.ndarray) -> np.ndarray:
-        """Return a full unnormalized action chunk ``(H, nu)`` of joint velocities."""
-        torch = self._torch
-        obs = {
-            "observation.environment_state": torch.as_tensor(
-                np.asarray(q, dtype=np.float32).reshape(1, -1)
-            )
-        }
-        with torch.no_grad():
-            obs = self.preprocessor(obs)
-            chunk = self.policy.predict_action_chunk(obs)  # (1, H, nu), normalized
-            actions = [self.postprocessor(chunk[:, i]) for i in range(chunk.shape[1])]
-        chunk = torch.cat(actions, dim=0).detach().cpu().numpy().astype(float)
-        if chunk.ndim != 2 or chunk.shape[1] != self.nu:
-            raise ValueError(f"ACT chunk must be (H, {self.nu}), got {chunk.shape}")
-        return chunk
 
     def _compute_v_cmd(self, cycle_period):
         del cycle_period  # unused for ACT
