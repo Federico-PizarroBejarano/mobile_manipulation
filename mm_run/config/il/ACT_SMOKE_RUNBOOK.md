@@ -9,19 +9,23 @@ cd /home/federico/catkin_ws/src/mobile_manipulation
 ## IL environment setup
 
 Keep LeRobot and its ML dependencies outside the catkin Python environment.
-Use the `mm-il` conda env (Python ≥3.10), or an equivalent venv:
+Use the `mm-il` conda env (Python ≥3.10, PyTorch **cu118** so Maxwell GPUs
+like Quadro M2000M work):
 
 ```bash
-conda activate mm-il   # or: source .venv-il/bin/activate
-python -m pip install -r mm_run/requirements-il.txt
-python -c "import lerobot, torch; print(lerobot.__version__, torch.__version__)"
+conda activate mm-il
+# If recreating: install torch from the cu118 index first, then lerobot.
+#   pip install torch==2.6.0+cu118 torchvision==0.21.0+cu118 \
+#     --index-url https://download.pytorch.org/whl/cu118
+#   pip install -r mm_run/requirements-il.txt
+python -c "import lerobot, torch; print(lerobot.__version__, torch.__version__, torch.cuda.is_available())"
 ```
 
 `mm_run/requirements-il.txt` pins `lerobot>=0.4.0,<0.5` (needed for
-`LeRobotDataset.finalize` and checkpoint pre/post-processors). The training
+`LeRobotDataset.finalize` and checkpoint pre/post-processors). Train with
+`--policy.device=cuda` (see `train_act_smoke.sh`). The training
 `N_ACTION_STEPS` (default 25) must match the node's `--n-action-steps` (default
-25); `CHUNK_SIZE` defaults to 50. Confirm the installed LeRobot version before
-deploy (`lerobot-train --help` and the installed `ACTPolicy` API).
+25); `CHUNK_SIZE` defaults to 50.
 
 State-only export writes joint `q` to both `observation.state` and
 `observation.environment_state` (LeRobot ACT 0.4 requires env_state for config

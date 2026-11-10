@@ -1,4 +1,4 @@
-"""Standalone ACT inference worker for the mm-il (Python >=3.10) interpreter.
+"""Standalone ACT inference worker for the ``mm-il`` conda env (Python >=3.10).
 
 ROS Noetic nodes stay on system Python 3.8 and talk to this process over
 newline-delimited JSON on stdin/stdout so they never import torch/lerobot

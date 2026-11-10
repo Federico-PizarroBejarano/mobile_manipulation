@@ -1,4 +1,12 @@
-# Install into a dedicated conda/venv (not catkin).
+# Install into conda env mm-il (not catkin).
+# On Maxwell GPUs (e.g. Quadro M2000M), install torch from the cu118 index first:
+#   pip install torch==2.6.0+cu118 torchvision==0.21.0+cu118 \
+#     --index-url https://download.pytorch.org/whl/cu118
+# then:
+#   pip install -r mm_run/requirements-il.txt
+# Default pip torch wheels (cu12x) will not run on sm_50.
+#
 # lerobot 0.4+ is required for LeRobotDataset.finalize and checkpoint processors.
 lerobot>=0.4.0,<0.5
-torch
+torch>=2.2.1,<2.11
+torchvision>=0.21.0,<0.26

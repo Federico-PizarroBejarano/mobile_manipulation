@@ -45,6 +45,7 @@ class ActChunkRunner:
 
 
 def default_mm_il_python() -> str:
+    """Interpreter for ACT train/infer (conda env ``mm-il``, torch+cu118)."""
     return os.environ.get(
         "MM_IL_PYTHON",
         os.path.expanduser("~/miniconda3/envs/mm-il/bin/python"),
@@ -52,7 +53,7 @@ def default_mm_il_python() -> str:
 
 
 class ActPolicySubprocess:
-    """JSONL client to ``python -m mm_utils.act_policy_worker`` under mm-il."""
+    """JSONL client to ``python -m mm_utils.act_policy_worker`` under ``mm-il``."""
 
     def __init__(
         self,

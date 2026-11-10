@@ -136,8 +136,9 @@ class ActTeleopROSNode:
         self._sticks_active_param = True
         self.ctrl_c = False
 
-        # Policy inference runs under mm-il (Python >=3.10); this ROS node stays
-        # on Noetic's system Python 3.8 so pinocchio/casadi keep working.
+        # Policy inference runs under conda env mm-il (Python >=3.10 + CUDA);
+        # this ROS node stays on Noetic's system Python 3.8 so pinocchio/casadi
+        # keep working.
         self._policy = ActPolicySubprocess(args.checkpoint, nu=self.nu)
         atexit.register(self._policy.close)
         self.runner = ActChunkRunner(
