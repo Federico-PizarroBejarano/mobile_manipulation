@@ -90,7 +90,7 @@ rl:
   checkpoint: "checkpoints/final_model.pth"
 
 simulation:
-  duration: 60
+  duration: 20
   robot:
     home: [-0.33665274, -0.90893908, -0.00288675, 1.57075858, -1.18163425, 1.48354578, 1.18163860, 1.57084656, 1.57066226]
 

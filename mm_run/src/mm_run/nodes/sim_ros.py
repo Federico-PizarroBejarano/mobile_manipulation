@@ -15,6 +15,7 @@ from mm_simulator import simulation
 from mm_utils import parsing
 from mm_utils.logging import DataLogger
 from mm_utils.teleop_session_logging import (
+    adopt_shared_results_user,
     clear_experiment_timestamp,
     resolve_experiment_timestamp,
 )
@@ -155,6 +156,9 @@ def main():
             )
             break
 
+    # Controller may have nested under <log_dir>/<user>/ via trial metadata;
+    # adopt the shared ROS param so sim/ is not orphaned at <log_dir>/<ts>/.
+    adopt_shared_results_user(logger)
     logger.save(session_timestamp=session_timestamp)
 
 

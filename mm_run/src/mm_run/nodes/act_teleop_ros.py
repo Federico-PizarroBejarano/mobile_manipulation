@@ -142,7 +142,7 @@ class ActTeleopROSNode:
         self._policy = ActPolicySubprocess(args.checkpoint, nu=self.nu)
         atexit.register(self._policy.close)
         self.runner = ActChunkRunner(
-            self._policy.predict_chunk, n_action_steps=int(args.n_action_steps)
+            self._predict_chunk, n_action_steps=int(args.n_action_steps)
         )
 
         self.robot_interface = MobileManipulatorROSInterface()
@@ -340,6 +340,11 @@ class ActTeleopROSNode:
             "Gripper %s (Triangle/Y)",
             "open" if self._gripper_open else "closed",
         )
+
+    def _predict_chunk(self, q: np.ndarray) -> np.ndarray:
+        """ACT obs: joint q; worker duplicates q into environment_state."""
+        q = np.asarray(q, dtype=float).reshape(-1)[: self.dof]
+        return self._policy.predict_chunk(q)
 
     def _compute_v_cmd(self, cycle_period):
         del cycle_period  # unused for ACT

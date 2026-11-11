@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 EXPERIMENT_TIMESTAMP_PARAM = "/experiment_timestamp"
+EXPERIMENT_RESULTS_USER_PARAM = "/experiment_results_user"
 SESSION_TIMESTAMP_FORMAT = "%Y-%m-%d_%H-%M-%S"
 
 DEFAULT_CURATED_BAG_TOPICS = [
@@ -77,16 +78,56 @@ def resolve_experiment_timestamp(create=True):
     return ts
 
 
-def clear_experiment_timestamp():
-    """Drop the shared stamp so the next launch does not reuse this folder."""
+def _delete_param_if_set(name):
     import rospy
 
-    if not rospy.has_param(EXPERIMENT_TIMESTAMP_PARAM):
+    if not rospy.has_param(name):
         return
     try:
-        rospy.delete_param(EXPERIMENT_TIMESTAMP_PARAM)
+        rospy.delete_param(name)
     except KeyError:
         pass
+
+
+def clear_experiment_timestamp():
+    """Drop shared session identity so the next launch does not reuse folders.
+
+    Clears both ``/experiment_timestamp`` and ``/experiment_results_user``.
+    """
+    _delete_param_if_set(EXPERIMENT_TIMESTAMP_PARAM)
+    _delete_param_if_set(EXPERIMENT_RESULTS_USER_PARAM)
+
+
+def publish_experiment_results_user(user):
+    """Publish the results user folder so sim/control share ``<log_dir>/<user>/``.
+
+    Never overwrites an existing value (same rule as the shared timestamp).
+    """
+    import rospy
+
+    name = results_user_dirname(user)
+    if rospy.has_param(EXPERIMENT_RESULTS_USER_PARAM):
+        return str(rospy.get_param(EXPERIMENT_RESULTS_USER_PARAM))
+    rospy.set_param(EXPERIMENT_RESULTS_USER_PARAM, name)
+    return name
+
+
+def resolve_experiment_results_user():
+    """Return ``/experiment_results_user`` if set, else ``None``."""
+    import rospy
+
+    if not rospy.has_param(EXPERIMENT_RESULTS_USER_PARAM):
+        return None
+    return results_user_dirname(rospy.get_param(EXPERIMENT_RESULTS_USER_PARAM))
+
+
+def adopt_shared_results_user(logger):
+    """Nest ``logger`` under the shared results user when one is published."""
+    user = resolve_experiment_results_user()
+    if user is None:
+        return None
+    nest_results_under_user(logger, user)
+    return user
 
 
 def vicon_object_topic(name):
@@ -250,6 +291,12 @@ def apply_trial_metadata(logger, user, trial):
     logger.add("user", user)
     logger.add("trial", trial)
     nest_results_under_user(logger, user)
+    # Best-effort: sim_ros adopts this before save so sim/ lands under the same
+    # user folder. Ignore failures outside an active ROS master / unit tests.
+    try:
+        publish_experiment_results_user(user)
+    except Exception:
+        pass
 
 
 VALID_LOGGING_PROFILES = ("debug", "deploy")

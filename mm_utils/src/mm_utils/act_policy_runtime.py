@@ -111,7 +111,9 @@ class ActPolicySubprocess:
                 continue
             return json.loads(line)
 
-    def predict_chunk(self, q: np.ndarray) -> np.ndarray:
+    def predict_chunk(
+        self, q: np.ndarray, env_state: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         if self._proc.poll() is not None:
             raise RuntimeError(f"ACT worker died (code={self._proc.returncode})")
         assert self._proc.stdin is not None
@@ -119,6 +121,10 @@ class ActPolicySubprocess:
             "cmd": "predict",
             "q": np.asarray(q, dtype=float).reshape(-1).tolist(),
         }
+        if env_state is not None:
+            payload["env_state"] = (
+                np.asarray(env_state, dtype=float).reshape(-1).tolist()
+            )
         self._proc.stdin.write(json.dumps(payload) + "\n")
         self._proc.stdin.flush()
         resp = self._readline(timeout_label="predict")

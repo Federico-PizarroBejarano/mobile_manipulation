@@ -68,10 +68,16 @@ def main(argv=None) -> int:
 
         try:
             q = np.asarray(req["q"], dtype=np.float32).reshape(1, -1)
+            if "env_state" in req:
+                env = np.asarray(req["env_state"], dtype=np.float32).reshape(1, -1)
+            else:
+                # Tight smoke path: env_state duplicates q (width 9).
+                env = q
             q_t = torch.as_tensor(q)
+            env_t = torch.as_tensor(env)
             obs = {
                 "observation.state": q_t,
-                "observation.environment_state": q_t.clone(),
+                "observation.environment_state": env_t,
             }
             with torch.no_grad():
                 obs = preprocessor(obs)

@@ -23,14 +23,16 @@ python -c "import lerobot, torch; print(lerobot.__version__, torch.__version__, 
 
 `mm_run/requirements-il.txt` pins `lerobot>=0.4.0,<0.5` (needed for
 `LeRobotDataset.finalize` and checkpoint pre/post-processors). Train with
-`--policy.device=cuda` (see `train_act_smoke.sh`). The training
+`--policy.device=cuda` (see `train_act_smoke.sh`). State-only defaults use a
+smaller transformer than LeRobot's vision ACT
+(`dim_model=256`, `dim_feedforward=1024`, `n_encoder_layers=2`). The training
 `N_ACTION_STEPS` (default 25) must match the node's `--n-action-steps` (default
 25); `CHUNK_SIZE` defaults to 50.
 
-State-only export writes joint `q` to both `observation.state` and
-`observation.environment_state` (LeRobot ACT 0.4 requires env_state for config
-validation but still reads `observation.state` in the VAE forward path). Re-export
-the dataset after changing feature keys.
+Export writes joint `q` → both `observation.state` and
+`observation.environment_state` (width 9). Re-export after changing feature keys.
+To continue an existing run to more steps (weights + optimizer):
+`RESUME_CONFIG=.../checkpoints/020000/pretrained_model/train_config.json STEPS=40000 ./train_act_smoke.sh DATASET_ROOT OUTPUT_DIR`.
 
 Deploy architecture: `act_teleop_ros.py` stays on ROS Noetic (system Python
 3.8). It spawns `python -m mm_utils.act_policy_worker` under
@@ -64,13 +66,21 @@ python mm_run/src/mm_run/scripts/export_teleop_to_lerobot.py \
 - [ ] Train ACT with the repository script:
 
 ```bash
+conda activate mm-il
 ./mm_run/src/mm_run/scripts/train_act_smoke.sh \
   /path/to/datasets/table_wipe_act_smoke \
-  /path/to/outputs/act_table_wipe_smoke
+  /path/to/outputs/act_table_wipe_smoke_tight
 ```
 
+The train script tees console output to `OUTPUT_DIR/train_console.log` and
+writes `metrics.csv` / `metrics.jsonl` / `metrics_summary.txt` (loss vs step).
+Re-parse a pasted log anytime with
+`python mm_run/src/mm_run/scripts/parse_lerobot_train_log.py LOG --out-dir DIR`.
+
 - [ ] Confirm that training produced a loadable checkpoint, typically:
-      `/path/to/outputs/act_table_wipe_smoke/checkpoints/last/pretrained_model`.
+      `.../act_table_wipe_smoke_tight/checkpoints/last/pretrained_model`.
+      Keep the original `act_table_wipe_smoke` run for A/B comparison.
+- [ ] Skim `metrics_summary.txt` / `metrics.csv` for plateau vs still-falling loss.
 - [ ] Save the exact LeRobot version, command line, dataset path, and checkpoint
       path with the run notes.
 

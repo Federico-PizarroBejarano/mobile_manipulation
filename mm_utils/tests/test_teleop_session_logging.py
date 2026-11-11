@@ -6,6 +6,7 @@ import numpy as np
 from mm_utils.logging import DataLogger
 from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
+    adopt_shared_results_user,
     append_teleop_sample,
     apply_logging_profile,
     apply_teleop_backend,
@@ -20,6 +21,8 @@ from mm_utils.teleop_session_logging import (
     nest_results_under_user,
     pad_joy_buttons,
     prompt_trial_metadata,
+    publish_experiment_results_user,
+    resolve_experiment_results_user,
     resolve_experiment_timestamp,
     results_user_dirname,
     session_root,
@@ -101,7 +104,10 @@ def test_resolve_experiment_timestamp_creates_when_missing(monkeypatch):
 
 
 def test_clear_experiment_timestamp(monkeypatch):
-    store = {"/experiment_timestamp": "x"}
+    store = {
+        "/experiment_timestamp": "x",
+        "/experiment_results_user": "alice",
+    }
 
     class FakeRospy:
         @staticmethod
@@ -115,6 +121,50 @@ def test_clear_experiment_timestamp(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "rospy", FakeRospy)
     clear_experiment_timestamp()
     assert "/experiment_timestamp" not in store
+    assert "/experiment_results_user" not in store
+
+
+def test_publish_and_resolve_experiment_results_user(monkeypatch):
+    store = {}
+
+    class FakeRospy:
+        @staticmethod
+        def has_param(name):
+            return name in store
+
+        @staticmethod
+        def get_param(name):
+            return store[name]
+
+        @staticmethod
+        def set_param(name, value):
+            store[name] = value
+
+    monkeypatch.setitem(__import__("sys").modules, "rospy", FakeRospy)
+    assert resolve_experiment_results_user() is None
+    assert publish_experiment_results_user(" alice ") == "alice"
+    assert store["/experiment_results_user"] == "alice"
+    # First writer wins.
+    assert publish_experiment_results_user("bob") == "alice"
+    assert resolve_experiment_results_user() == "alice"
+
+
+def test_adopt_shared_results_user(monkeypatch, tmp_path):
+    store = {"/experiment_results_user": "alice"}
+
+    class FakeRospy:
+        @staticmethod
+        def has_param(name):
+            return name in store
+
+        @staticmethod
+        def get_param(name):
+            return store[name]
+
+    monkeypatch.setitem(__import__("sys").modules, "rospy", FakeRospy)
+    logger = DataLogger({"logging": {"log_dir": str(tmp_path)}}, name="sim")
+    assert adopt_shared_results_user(logger) == "alice"
+    assert logger.base_directory == Path(tmp_path) / "alice"
 
 
 def test_vicon_object_topic():
@@ -293,7 +343,23 @@ def test_trial_bag_recorder_popen_failure_sets_error(tmp_path):
     assert rec.bag_path is None
 
 
-def test_apply_trial_metadata(tmp_path):
+def test_apply_trial_metadata(monkeypatch, tmp_path):
+    store = {}
+
+    class FakeRospy:
+        @staticmethod
+        def has_param(name):
+            return name in store
+
+        @staticmethod
+        def get_param(name):
+            return store[name]
+
+        @staticmethod
+        def set_param(name, value):
+            store[name] = value
+
+    monkeypatch.setitem(__import__("sys").modules, "rospy", FakeRospy)
     cfg = {"logging": {"log_dir": str(tmp_path)}}
     logger = DataLogger(cfg, name="control")
     apply_trial_metadata(logger, "  alice  ", 3)
@@ -304,6 +370,7 @@ def test_apply_trial_metadata(tmp_path):
         "trial": 3,
     }
     assert logger.base_directory == Path(tmp_path) / "alice"
+    assert store["/experiment_results_user"] == "alice"
     # Second apply must not nest again (user key already exists; new logger).
     again = DataLogger(
         {"logging": {"log_dir": str(tmp_path / "alice")}}, name="control"

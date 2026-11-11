@@ -19,17 +19,20 @@ import numpy as np
 
 from mm_utils.il_episode import extract_episode, find_control_npzs
 
-# LeRobot ACT 0.4 validates that env_state (or images) exist, but the VAE
-# forward path still indexes observation.state for device/tokens. Export q as
-# both keys (same vector) for a state-only joint policy.
-_Q_FEATURE = {
-    "dtype": "float32",
-    "shape": (9,),
-    "names": None,
-}
+# observation.state = joint q (9). observation.environment_state = q again (9).
+# LeRobot ACT 0.4 requires env_state for config validation; the smoke path
+# duplicates q (tight baseline that beat the EE-pose A/B).
 FEATURES = {
-    "observation.state": dict(_Q_FEATURE),
-    "observation.environment_state": dict(_Q_FEATURE),
+    "observation.state": {
+        "dtype": "float32",
+        "shape": (9,),
+        "names": None,
+    },
+    "observation.environment_state": {
+        "dtype": "float32",
+        "shape": (9,),
+        "names": None,
+    },
     "action": {
         "dtype": "float32",
         "shape": (9,),
@@ -106,11 +109,10 @@ def main(argv=None):
     provenance = []
     for path, ep in episodes:
         for i in range(ep["n_frames"]):
-            q_i = ep["q"][i]
             dataset.add_frame(
                 {
-                    "observation.state": q_i,
-                    "observation.environment_state": q_i,
+                    "observation.state": ep["q"][i],
+                    "observation.environment_state": ep["q"][i],
                     "action": ep["u_cmd"][i],
                     "task": args.task,
                 }
@@ -126,7 +128,16 @@ def main(argv=None):
 
     dataset.finalize()
     prov_path = Path(args.out) / "mm_export_provenance.json"
-    prov_path.write_text(json.dumps({"fps": fps, "episodes": provenance}, indent=2))
+    prov_path.write_text(
+        json.dumps(
+            {
+                "fps": fps,
+                "env_state": "q_duplicate",
+                "episodes": provenance,
+            },
+            indent=2,
+        )
+    )
     print(f"wrote {len(episodes)} episodes to {args.out} (fps={fps})")
 
 
