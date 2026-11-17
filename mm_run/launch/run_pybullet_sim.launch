@@ -6,11 +6,23 @@
   <arg name="ctrl_config" default="default" doc="alternative controller config overwriting the one in config"/>
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
-  <arg name="teleop" default="none" doc="direct|mpsf|rl|act|none — which plan publisher to run"/>
-  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act"/>
+  <arg name="teleop" default="none" doc="direct|mpsf|rl|act|act_ee|none — which plan publisher to run"/>
+  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act|act_ee"/>
+  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state for teleop:=act_ee (obs_duplicate|ee_pose|zeros)"/>
+  <arg name="act_n_action_steps" default="12" doc="ACT execute horizon (frozen recipe; 0=from checkpoint for act_ee)"/>
+  <arg name="act_boundary_blend" default="0.5" doc="ACT boundary blend weight [0,1] (frozen: 0.5)"/>
+  <arg name="act_boundary_blend_mode" default="decay" doc="constant|decay|head (frozen: decay)"/>
+  <arg name="act_boundary_blend_head" default="3" doc="head mode: steps to blend at seam"/>
+  <arg name="act_temporal_ensemble_coeff" default="none" doc="paper temporal ensembling coeff for teleop:=act|act_ee (none=off; forces na=1)"/>
+  <arg name="auto_start" default="false" doc="skip Square/Enter and start the trial immediately"/>
   <arg name="record_bag" default="false" doc="record rosbag on Square/Enter start, stop on Circle/shutdown"/>
   <arg name="bag_all" default="false" doc="if true, record all topics (trial_all.bag) instead of curated set"/>
   <arg name="gui" default="false" doc="Enable PyBullet GUI"/>
+  <arg name="sim_lockstep" default="true" doc="advance sim only after each control cycle (GUI-safe)"/>
+
+  <!-- Clear leftover flags from a prior launch on a shared ros master. -->
+  <param name="/controller_started" value="false"/>
+  <param name="/controller_finished" value="false"/>
 
   <!-- Simulation -->
   <include file="$(find mm_run)/launch/pybullet_sim.launch" pass_all_args="true"/>

@@ -6,6 +6,7 @@
 .cursor/
 .cursorindexignore
 .ruff_cache/
+CLAUDE.md
 
 # Acados
 c_generated_code/

@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <!-- Plan node publishes mm_run/MpcPlan; low_level_cmd_node publishes cmd_vel.
-     teleop:=none → mpc_ros | mpsf → mpsf_ros | direct → direct_teleop_ros | rl → rl_teleop_ros | act → act_teleop_ros -->
+     teleop:=none → mpc_ros | mpsf → mpsf_ros | direct → direct_teleop_ros |
+     rl → rl_teleop_ros | act → act_teleop_ros | act_ee → act_ee_mpsf_ros -->
 
 <launch>
   <!-- acados (HPIPM): if Python fails to load the solver with an undefined symbol from libhpipm,
@@ -10,14 +11,22 @@
   <arg name="ctrl_config" default="default" doc="alternative controller config overwriting the one in config"/>
   <arg name="planner_config" default="default" doc="alternative planner config overwriting the one in config"/>
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
-  <arg name="teleop" default="none" doc="direct|mpsf|rl|act|none — which plan publisher to run"/>
-  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act"/>
+  <arg name="teleop" default="none" doc="direct|mpsf|rl|act|act_ee|none — which plan publisher to run"/>
+  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act|act_ee"/>
+  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state for teleop:=act_ee (obs_duplicate|ee_pose|zeros)"/>
+  <arg name="act_n_action_steps" default="12" doc="ACT execute horizon (frozen recipe; 0=from checkpoint for act_ee)"/>
+  <arg name="act_boundary_blend" default="0.5" doc="ACT boundary blend weight [0,1] (frozen: 0.5)"/>
+  <arg name="act_boundary_blend_mode" default="decay" doc="constant|decay|head (frozen: decay)"/>
+  <arg name="act_boundary_blend_head" default="3" doc="head mode: steps to blend at seam"/>
+  <arg name="act_temporal_ensemble_coeff" default="none" doc="paper temporal ensembling coeff for teleop:=act|act_ee (none=off; forces na=1)"/>
+  <arg name="auto_start" default="false" doc="skip Square/Enter and start the trial immediately"/>
   <arg name="mpc_plan_topic" default="/mpc_plan" doc="topic for mm_run/MpcPlan between plan and low-level nodes"/>
   <arg name="record_bag" default="false" doc="record rosbag on Square/Enter start, stop on Circle/shutdown"/>
   <arg name="bag_all" default="false" doc="if true, record all topics (trial_all.bag) instead of curated set"/>
 
   <!-- Consumed by low_level_cmd_node (rejects invalid values so typos don't leave a bricked stack). -->
   <param name="/mm_run/teleop_mode" value="$(arg teleop)"/>
+  <param name="/mm_run/auto_start" value="$(arg auto_start)"/>
 
   <node if="$(eval arg('teleop') == 'mpsf')" pkg="mm_run" type="mpsf_ros.py" name="controller_mpsf" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder)">
     <param name="record_bag" value="$(arg record_bag)"/>
@@ -34,7 +43,12 @@
     <param name="bag_all" value="$(arg bag_all)"/>
     <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
   </node>
-  <node if="$(eval arg('teleop') == 'act')" pkg="mm_run" type="act_teleop_ros.py" name="controller_act_teleop" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder) --checkpoint $(arg act_checkpoint)">
+  <node if="$(eval arg('teleop') == 'act')" pkg="mm_run" type="act_teleop_ros.py" name="controller_act_teleop" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder) --checkpoint $(arg act_checkpoint) --n-action-steps $(arg act_n_action_steps) --boundary-blend $(arg act_boundary_blend) --boundary-blend-mode $(arg act_boundary_blend_mode) --boundary-blend-head $(arg act_boundary_blend_head) --temporal-ensemble-coeff $(arg act_temporal_ensemble_coeff)">
+    <param name="record_bag" value="$(arg record_bag)"/>
+    <param name="bag_all" value="$(arg bag_all)"/>
+    <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
+  </node>
+  <node if="$(eval arg('teleop') == 'act_ee')" pkg="mm_run" type="act_ee_mpsf_ros.py" name="controller_act_ee_mpsf" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder) --checkpoint $(arg act_checkpoint) --env-state $(arg act_env_state) --n-action-steps $(arg act_n_action_steps) --boundary-blend $(arg act_boundary_blend) --boundary-blend-mode $(arg act_boundary_blend_mode) --boundary-blend-head $(arg act_boundary_blend_head) --temporal-ensemble-coeff $(arg act_temporal_ensemble_coeff)">
     <param name="record_bag" value="$(arg record_bag)"/>
     <param name="bag_all" value="$(arg bag_all)"/>
     <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>

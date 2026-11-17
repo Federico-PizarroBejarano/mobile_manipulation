@@ -8,6 +8,7 @@ from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     adopt_shared_results_user,
     append_teleop_sample,
+    apply_act_run,
     apply_logging_profile,
     apply_teleop_backend,
     apply_trial_metadata,
@@ -420,6 +421,66 @@ def test_apply_teleop_backend(tmp_path):
     apply_teleop_backend(logger, "act")
     assert logger.data["teleop_backend"] == "act"
     assert logger.config["logging"]["teleop_backend"] == "act"
+    apply_teleop_backend(logger, "act_ee")
+    assert logger.data["teleop_backend"] == "act_ee"
+    assert logger.config["logging"]["teleop_backend"] == "act_ee"
+
+
+def test_apply_act_run_records_checkpoint_and_knobs(tmp_path):
+    step = tmp_path / "checkpoints" / "150000" / "pretrained_model"
+    step.mkdir(parents=True)
+    (tmp_path / "checkpoints" / "last").symlink_to("150000", target_is_directory=True)
+    passed = tmp_path / "checkpoints" / "last" / "pretrained_model"
+
+    cfg = {"logging": {"log_dir": str(tmp_path / "logs")}}
+    logger = DataLogger(cfg, name="control")
+    apply_act_run(
+        logger,
+        passed,
+        n_action_steps=12,
+        boundary_blend=0.5,
+        boundary_blend_mode="decay",
+        boundary_blend_head=3,
+        nu=9,
+        env_state="obs_duplicate",
+        temporal_ensemble_coeff=0.01,
+    )
+    act = logger.config["logging"]["act"]
+    assert act["checkpoint"] == str(passed)
+    assert act["checkpoint_resolved"] == str(step.resolve())
+    assert act["n_action_steps"] == 12
+    assert act["boundary_blend"] == 0.5
+    assert act["boundary_blend_mode"] == "decay"
+    assert act["boundary_blend_head"] == 3
+    assert act["nu"] == 9
+    assert act["env_state"] == "obs_duplicate"
+    assert act["temporal_ensemble_coeff"] == 0.01
+
+    logger.save(session_timestamp="2026-11-16_11-00-00")
+    saved = tmp_path / "logs" / "2026-11-16_11-00-00" / "control" / "config.yaml"
+    text = saved.read_text()
+    assert "checkpoint_resolved:" in text
+    assert "150000/pretrained_model" in text
+
+
+def test_apply_act_run_missing_checkpoint_does_not_raise(tmp_path):
+    cfg = {"logging": {"log_dir": str(tmp_path)}}
+    logger = DataLogger(cfg, name="control")
+    missing = "/no/such/checkpoints/last/pretrained_model"
+    apply_act_run(
+        logger,
+        missing,
+        n_action_steps=12,
+        boundary_blend=0.5,
+        boundary_blend_mode="decay",
+        boundary_blend_head=3,
+    )
+    act = logger.config["logging"]["act"]
+    assert act["checkpoint"] == missing
+    assert act["checkpoint_resolved"] == ""
+    assert act["nu"] is None
+    assert act["env_state"] is None
+    assert act["temporal_ensemble_coeff"] is None
 
 
 def test_apply_teleop_backend_rejects_invalid(tmp_path):

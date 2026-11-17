@@ -4,18 +4,60 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Optional, Sequence
+from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-REQUIRED_KEYS = ("q", "u_cmd", "teleop_enabled")
+# Obs / action / env_state selectors for export and train. ``key`` is the npz
+# field; ``width`` is the exported vector length; optional ``cols`` slices
+# columns. ``obs_duplicate`` copies observation.state into environment_state.
+OBS_SPECS = {
+    "q": {"key": "q", "width": 9},
+}
+
+ACTION_SPECS = {
+    "u_cmd": {"key": "u_cmd", "width": 9},
+    "desired_ee_vel": {"key": "desired_ee_vel", "width": 6},
+    "desired_ee_vel_xyz": {"key": "desired_ee_vel", "width": 3, "cols": (0, 3)},
+}
+
+ENV_STATE_SPECS = {
+    "obs_duplicate": None,
+    "ee_pose": {"key": "ee_pose", "width": 6},
+    # Constant zeros; width 1 minimizes the unused ENV pathway (ACT still requires it).
+    "zeros": {"width": 1, "constant": 0.0},
+}
 
 
-def load_control_npz(path: Path) -> Dict[str, np.ndarray]:
+def resolve_obs_spec(name: str) -> dict:
+    if name not in OBS_SPECS:
+        raise ValueError(f"unknown --obs {name!r}; choose from {tuple(OBS_SPECS)}")
+    return OBS_SPECS[name]
+
+
+def resolve_action_spec(name: str) -> dict:
+    if name not in ACTION_SPECS:
+        raise ValueError(
+            f"unknown --action {name!r}; choose from {tuple(ACTION_SPECS)}"
+        )
+    return ACTION_SPECS[name]
+
+
+def resolve_env_state_spec(name: str):
+    if name not in ENV_STATE_SPECS:
+        raise ValueError(
+            f"unknown --env-state {name!r}; choose from {tuple(ENV_STATE_SPECS)}"
+        )
+    return ENV_STATE_SPECS[name]
+
+
+def load_control_npz(
+    path: Path, *, required_keys: Sequence[str]
+) -> Dict[str, np.ndarray]:
     path = Path(path)
     with np.load(path, allow_pickle=True) as raw:
         data = {k: raw[k] for k in raw.files}
-    missing = [k for k in REQUIRED_KEYS if k not in data]
+    missing = [k for k in required_keys if k not in data]
     if missing:
         raise KeyError(f"{path} missing keys {missing}")
     return data
@@ -60,34 +102,86 @@ def infer_fps(
     return max(1, int(round(float(default_fps))))
 
 
+def _take_columns(arr: np.ndarray, width: int, cols: Optional[Tuple[int, int]]):
+    arr = np.asarray(arr)
+    if arr.ndim != 2:
+        raise ValueError(f"expected 2D array, got shape {arr.shape}")
+    if cols is not None:
+        start, end = cols
+        arr = arr[:, start:end]
+    if arr.shape[1] != width:
+        raise ValueError(f"expected width {width}, got shape {arr.shape}")
+    return arr
+
+
 def extract_episode(
     control_npz: Path,
     *,
+    obs: str = "q",
+    action: str = "u_cmd",
+    env_state: str = "obs_duplicate",
     min_enabled_seconds: float = 0.5,
     default_fps: float = 50.0,
 ) -> Dict[str, object]:
-    data = load_control_npz(control_npz)
-    filtered = filter_enabled(data, ("q", "u_cmd"))
+    obs_spec = resolve_obs_spec(obs)
+    action_spec = resolve_action_spec(action)
+    env_spec = resolve_env_state_spec(env_state)
+    obs_key = str(obs_spec["key"])
+    action_key = str(action_spec["key"])
+    required = ["teleop_enabled", obs_key, action_key]
+    filter_keys = [obs_key, action_key]
+    if env_spec is not None and "key" in env_spec:
+        env_key = str(env_spec["key"])
+        required.append(env_key)
+        filter_keys.append(env_key)
+    data = load_control_npz(control_npz, required_keys=tuple(required))
+    filtered = filter_enabled(data, tuple(dict.fromkeys(filter_keys)))
     fps = infer_fps(
         data.get("cycle_period"),
         data.get("ts"),
         default_fps=default_fps,
     )
-    n = int(filtered["q"].shape[0])
-    if filtered["u_cmd"].shape[0] != n:
-        raise ValueError("q/u_cmd length mismatch after filter")
-    if filtered["q"].shape[1] != 9 or filtered["u_cmd"].shape[1] != 9:
-        raise ValueError(
-            f"expected q,u_cmd width 9, got {filtered['q'].shape}, {filtered['u_cmd'].shape}"
+    observation = _take_columns(
+        filtered[obs_key],
+        int(obs_spec["width"]),
+        obs_spec.get("cols"),
+    )
+    action_arr = _take_columns(
+        filtered[action_key],
+        int(action_spec["width"]),
+        action_spec.get("cols"),
+    )
+    n = int(observation.shape[0])
+    if env_spec is None:
+        environment_state = observation
+    elif "constant" in env_spec:
+        environment_state = np.full(
+            (n, int(env_spec["width"])),
+            float(env_spec["constant"]),
+            dtype=np.float32,
         )
+    else:
+        environment_state = _take_columns(
+            filtered[str(env_spec["key"])],
+            int(env_spec["width"]),
+            env_spec.get("cols"),
+        )
+    if action_arr.shape[0] != n:
+        raise ValueError("observation/action length mismatch after filter")
+    if environment_state.shape[0] != n:
+        raise ValueError("observation/env_state length mismatch after filter")
     duration = n / float(fps)
     if duration < float(min_enabled_seconds):
         raise ValueError(
             f"episode too short: {duration:.3f}s enabled < {min_enabled_seconds}s"
         )
     return {
-        "q": np.asarray(filtered["q"], dtype=np.float32),
-        "u_cmd": np.asarray(filtered["u_cmd"], dtype=np.float32),
+        "observation": np.asarray(observation, dtype=np.float32),
+        "environment_state": np.asarray(environment_state, dtype=np.float32),
+        "action": np.asarray(action_arr, dtype=np.float32),
+        "obs": obs,
+        "env_state": env_state,
+        "action_name": action,
         "fps": int(fps),
         "n_frames": n,
     }

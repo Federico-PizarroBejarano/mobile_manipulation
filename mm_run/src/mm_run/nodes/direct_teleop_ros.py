@@ -43,6 +43,11 @@ from mm_utils.robotiq_gripper import (
     seed_gripper_mode_position,
     toggle_gripper_open,
 )
+from mm_utils.sim_lockstep import (
+    ControlCycleDonePublisher,
+    end_control_cycle,
+    lockstep_enabled,
+)
 from mm_utils.teleop_joy import (
     FORCE_ZERO_LL_KP_PARAM,
     STICKS_ACTIVE_PARAM,
@@ -526,7 +531,9 @@ class DirectTeleopROSNode:
 
     def _publish_velocity_plan(self, v_cmd, t):
         v_cmd = np.asarray(v_cmd, dtype=float).reshape(self.nu)
-        N = 1
+        # Two identical steps: horizon is 2*dt, so a replan at ctrl_rate ~= 1/dt
+        # arrives before low_level_cmd_node expires the plan and zeros cmd_vel.
+        N = 2
         u_bar = np.zeros((N, self.nu))
         v_bar = np.tile(v_cmd, (N + 1, 1))
         q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
@@ -555,6 +562,13 @@ class DirectTeleopROSNode:
                 "rosbag record failed to start: %s", self.bag_recorder.last_error
             )
 
+        self._cycle_done_pub = None
+        if lockstep_enabled():
+            self._cycle_done_pub = ControlCycleDonePublisher()
+            rospy.loginfo(
+                "Direct teleop lockstep: signaling /mm_run/control_cycle_done each cycle"
+            )
+        ctrl_period = 1.0 / self.rate_hz
         rospy.set_param("/controller_started", True)
         rospy.loginfo("Direct teleop started (session %s)", self.session_timestamp)
         self._cycle_t0 = time.perf_counter()
@@ -599,7 +613,7 @@ class DirectTeleopROSNode:
                 joy_axes,
                 joy_buttons,
             )
-            rate.sleep()
+            end_control_cycle(rate, ctrl_period, self._cycle_done_pub)
 
         self._publish_velocity_plan(np.zeros(self.nu), rospy.Time.now().to_sec())
         self.robot_interface.brake()

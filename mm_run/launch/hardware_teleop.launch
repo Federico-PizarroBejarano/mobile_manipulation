@@ -2,15 +2,21 @@
 <!-- Hardware teleop: plan node + low_level on the real robot.
      Requires thing.launch (robot + joy_stick_relay) already running unless launch_robot:=true.
      Joy defaults off: lab bringup already publishes /bluetooth_teleop/joy.
-     teleop:=mpsf (default), direct, rl, or act. -->
+     teleop:=mpsf (default), direct, rl, act, or act_ee. -->
 
 <launch>
   <arg name="config" doc="Experiment config YAML"/>
   <arg name="ctrl_config" default="default"/>
   <arg name="planner_config" default="default"/>
   <arg name="logging_sub_folder" default="default"/>
-  <arg name="teleop" default="mpsf" doc="mpsf, direct, rl, or act"/>
-  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act"/>
+  <arg name="teleop" default="mpsf" doc="mpsf, direct, rl, act, or act_ee"/>
+  <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act|act_ee"/>
+  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state for teleop:=act_ee (obs_duplicate|ee_pose|zeros)"/>
+  <arg name="act_n_action_steps" default="12" doc="ACT execute horizon (frozen recipe; 0=from checkpoint for act_ee)"/>
+  <arg name="act_boundary_blend" default="0.5" doc="ACT boundary blend weight [0,1] (frozen: 0.5)"/>
+  <arg name="act_boundary_blend_mode" default="decay" doc="constant|decay|head (frozen: decay)"/>
+  <arg name="act_boundary_blend_head" default="3" doc="head mode: steps to blend at seam"/>
+  <arg name="act_temporal_ensemble_coeff" default="none" doc="paper temporal ensembling coeff for teleop:=act|act_ee (none=off; forces na=1)"/>
   <arg name="controller_type" default="ps4" doc="ps4 or xbox (only used if joystick:=true)"/>
   <arg name="joy_dev" default="$(optenv RIDGEBACK_JOY_DEVICE /dev/input/js0)"/>
   <arg name="joystick" default="false" doc="start mm_run joy_node; leave false if /bluetooth_teleop/joy already exists"/>
@@ -33,6 +39,12 @@
     <arg name="logging_sub_folder" value="$(arg logging_sub_folder)"/>
     <arg name="teleop" value="$(arg teleop)"/>
     <arg name="act_checkpoint" value="$(arg act_checkpoint)"/>
+    <arg name="act_env_state" value="$(arg act_env_state)"/>
+    <arg name="act_n_action_steps" value="$(arg act_n_action_steps)"/>
+    <arg name="act_boundary_blend" value="$(arg act_boundary_blend)"/>
+    <arg name="act_boundary_blend_mode" value="$(arg act_boundary_blend_mode)"/>
+    <arg name="act_boundary_blend_head" value="$(arg act_boundary_blend_head)"/>
+    <arg name="act_temporal_ensemble_coeff" value="$(arg act_temporal_ensemble_coeff)"/>
     <arg name="record_bag" value="$(arg record_bag)"/>
     <arg name="bag_all" value="$(arg bag_all)"/>
   </include>

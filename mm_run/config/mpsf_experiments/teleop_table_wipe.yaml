@@ -15,6 +15,10 @@
 #   ... teleop:=rl _controller_rl_teleop/checkpoint:=/path/to/final_model.pth
 
 controller:
+  # Frozen IL recipe (2026-11-12): hold ~10 Hz with hard collisions (MPSF work
+  # ~80–90 ms). Do not rely on commanded 20 Hz — lockstep sim can fake it.
+  ctrl_rate: 10
+
   base_mask: [false, false, false]
   ee_mask: [false, false, false, false, false, false]
 
@@ -79,7 +83,7 @@ controller:
   static_obstacles_collision_avoidance_enabled: True
 
   acados:
-    name: "MPSF_Teleop_TableWipe"
+    name: "MPSF_Teleop_TableWipe_88cm"
 
 # Differential IK for direct / rl EE mode (ignored by mpsf).
 ik:
@@ -111,7 +115,7 @@ logging:
   log_level: 20
   # debug keeps the MPC horizon dump. deploy skips it and runs the control loop faster.
   profile: deploy
-  prompt_trial_metadata: True
+  prompt_trial_metadata: False
   # Independent wipe polylines (world frame). Table-to-table transitions are not scored.
   path_coverage:
     # Waypoints are compared to the logged EE frame origin (not the pad tip);

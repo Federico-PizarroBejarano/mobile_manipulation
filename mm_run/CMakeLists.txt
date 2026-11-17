@@ -27,6 +27,9 @@ catkin_install_python(
     src/mm_run/scripts/compute_path_coverage.py
     src/mm_run/scripts/test_joystick.py
     src/mm_run/scripts/export_teleop_to_lerobot.py
+    src/mm_run/scripts/eval_act_smoke.py
+    src/mm_run/scripts/backup_base.py
+    src/mm_run/scripts/run_hardware_act_sweep.py
     src/mm_run/nodes/sim_ros.py
     src/mm_run/nodes/mpc_ros.py
     src/mm_run/nodes/low_level_cmd_node.py
@@ -34,5 +37,6 @@ catkin_install_python(
     src/mm_run/nodes/direct_teleop_ros.py
     src/mm_run/nodes/rl_teleop_ros.py
     src/mm_run/nodes/act_teleop_ros.py
+    src/mm_run/nodes/act_ee_mpsf_ros.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

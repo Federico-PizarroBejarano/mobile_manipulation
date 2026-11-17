@@ -300,7 +300,7 @@ def apply_trial_metadata(logger, user, trial):
 
 
 VALID_LOGGING_PROFILES = ("debug", "deploy")
-VALID_TELEOP_BACKENDS = ("none", "mpsf", "direct", "rl", "act")
+VALID_TELEOP_BACKENDS = ("none", "mpsf", "direct", "rl", "act", "act_ee")
 
 
 def logging_profile(config):
@@ -335,6 +335,55 @@ def apply_teleop_backend(logger, backend):
         )
     logger.config.setdefault("logging", {})["teleop_backend"] = backend
     logger.data["teleop_backend"] = backend
+
+
+def _resolved_checkpoint(checkpoint):
+    """Follow ``checkpoints/last`` to the real step dir. Empty if missing."""
+    raw = str(checkpoint).strip()
+    if not raw:
+        return ""
+    try:
+        path = Path(raw)
+        if not path.exists():
+            return ""
+        return str(path.resolve())
+    except OSError:
+        return ""
+
+
+def apply_act_run(
+    logger,
+    checkpoint,
+    *,
+    n_action_steps,
+    boundary_blend,
+    boundary_blend_mode,
+    boundary_blend_head,
+    nu=None,
+    env_state=None,
+    temporal_ensemble_coeff=None,
+):
+    """Record the ACT checkpoint and launch knobs on ``control/config.yaml``.
+
+    ``checkpoint`` is the path passed on the command line (often
+    ``checkpoints/last/...``). ``checkpoint_resolved`` follows that symlink to
+    the real step directory. A missing path is still recorded and does not
+    raise; ``checkpoint_resolved`` is then empty.
+    """
+    record = {
+        "checkpoint": str(checkpoint).strip(),
+        "checkpoint_resolved": _resolved_checkpoint(checkpoint),
+        "n_action_steps": int(n_action_steps),
+        "boundary_blend": float(boundary_blend),
+        "boundary_blend_mode": str(boundary_blend_mode),
+        "boundary_blend_head": int(boundary_blend_head),
+        "nu": None if nu is None else int(nu),
+        "env_state": None if env_state is None else str(env_state),
+        "temporal_ensemble_coeff": (
+            None if temporal_ensemble_coeff is None else float(temporal_ensemble_coeff)
+        ),
+    }
+    logger.config.setdefault("logging", {})["act"] = record
 
 
 def controlling_tty_available():

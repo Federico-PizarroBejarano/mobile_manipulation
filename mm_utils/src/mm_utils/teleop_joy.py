@@ -17,8 +17,11 @@ STICKS_ACTIVE_PARAM = "/teleop_sticks_active"
 # Set True by direct_teleop_ros so low_level disables P tracking (shared YAML kp).
 FORCE_ZERO_LL_KP_PARAM = "/mm_run/force_zero_ll_kp"
 
-VALID_TELEOP_MODES = ("none", "mpsf", "direct", "rl", "act")
+VALID_TELEOP_MODES = ("none", "mpsf", "direct", "rl", "act", "act_ee")
 TELEOP_MODE_PARAM = "/mm_run/teleop_mode"
+# When True, controllers skip Square/Enter and start the trial immediately
+# (used by unattended ACT eval).
+AUTO_START_PARAM = "/mm_run/auto_start"
 
 TELEOP_DEFAULTS = {
     "enabled": False,

@@ -50,7 +50,89 @@ def test_extract_episode_writes_float32_and_rejects_short(tmp_path):
         cycle_period=np.full(40, 0.02),
     )
     ep = extract_episode(control / "data.npz", min_enabled_seconds=0.5)
-    assert ep["q"].shape == (30, 9)
-    assert ep["u_cmd"].dtype == np.float32
+    assert ep["observation"].shape == (30, 9)
+    assert ep["environment_state"].shape == (30, 9)
+    np.testing.assert_array_equal(ep["environment_state"], ep["observation"])
+    assert ep["action"].dtype == np.float32
+    assert ep["action"].shape == (30, 9)
+    assert ep["obs"] == "q"
+    assert ep["env_state"] == "obs_duplicate"
+    assert ep["action_name"] == "u_cmd"
     assert ep["fps"] == 50
     assert ep["n_frames"] == 30
+
+
+def test_extract_episode_desired_ee_vel(tmp_path):
+    control = tmp_path / "control"
+    control.mkdir()
+    n = 40
+    desired = np.random.randn(n, 6)
+    np.savez_compressed(
+        control / "data.npz",
+        q=np.random.randn(n, 9),
+        desired_ee_vel=desired,
+        teleop_enabled=np.array([0.0] * 5 + [1.0] * 30 + [0.0] * 5),
+        cycle_period=np.full(n, 0.02),
+    )
+    ep = extract_episode(
+        control / "data.npz",
+        action="desired_ee_vel",
+        min_enabled_seconds=0.5,
+    )
+    assert ep["action"].shape == (30, 6)
+    np.testing.assert_allclose(ep["action"][0], desired[5], rtol=1e-5)
+
+    ep_xyz = extract_episode(
+        control / "data.npz",
+        action="desired_ee_vel_xyz",
+        min_enabled_seconds=0.5,
+    )
+    assert ep_xyz["action"].shape == (30, 3)
+    np.testing.assert_allclose(ep_xyz["action"][0], desired[5, :3], rtol=1e-5)
+
+
+def test_extract_episode_env_state_ee_pose(tmp_path):
+    control = tmp_path / "control"
+    control.mkdir()
+    n = 40
+    ee_pose = np.random.randn(n, 6)
+    np.savez_compressed(
+        control / "data.npz",
+        q=np.random.randn(n, 9),
+        ee_pose=ee_pose,
+        desired_ee_vel=np.random.randn(n, 6),
+        teleop_enabled=np.array([0.0] * 5 + [1.0] * 30 + [0.0] * 5),
+        cycle_period=np.full(n, 0.02),
+    )
+    ep = extract_episode(
+        control / "data.npz",
+        action="desired_ee_vel",
+        env_state="ee_pose",
+        min_enabled_seconds=0.5,
+    )
+    assert ep["observation"].shape == (30, 9)
+    assert ep["environment_state"].shape == (30, 6)
+    assert ep["env_state"] == "ee_pose"
+    np.testing.assert_allclose(ep["environment_state"][0], ee_pose[5], rtol=1e-5)
+
+
+def test_extract_episode_env_state_zeros(tmp_path):
+    control = tmp_path / "control"
+    control.mkdir()
+    n = 40
+    np.savez_compressed(
+        control / "data.npz",
+        q=np.random.randn(n, 9),
+        desired_ee_vel=np.random.randn(n, 6),
+        teleop_enabled=np.array([0.0] * 5 + [1.0] * 30 + [0.0] * 5),
+        cycle_period=np.full(n, 0.02),
+    )
+    ep = extract_episode(
+        control / "data.npz",
+        action="desired_ee_vel",
+        env_state="zeros",
+        min_enabled_seconds=0.5,
+    )
+    assert ep["environment_state"].shape == (30, 1)
+    assert ep["env_state"] == "zeros"
+    np.testing.assert_array_equal(ep["environment_state"], np.zeros((30, 1)))

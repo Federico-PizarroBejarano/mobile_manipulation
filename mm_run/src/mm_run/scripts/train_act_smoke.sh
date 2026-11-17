@@ -3,7 +3,8 @@
 #
 # Sized for joint-state (no images): smaller transformer than LeRobot's
 # vision-oriented defaults so full trains finish faster on a 4GB GPU.
-# chunk_size / n_action_steps must match act_teleop --n-action-steps (25).
+# Frozen table-wipe recipe (2026-11-12): CHUNK_SIZE=25 N_ACTION_STEPS=12
+# at ctrl_rate/demo fps=10. Override via env if needed.
 #
 # Always tees console output to OUTPUT_DIR/train_console.log and parses a
 # local metrics.csv / metrics.jsonl (no wandb required).
@@ -24,6 +25,9 @@ REPO_ID="${REPO_ID:-local/table_wipe_act_smoke}"
 RESUME_CONFIG="${RESUME_CONFIG:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+# mm_run + mm_utils sources (len1-obs HF patch lives in mm_utils).
+export PYTHONPATH="${REPO_ROOT}/mm_run/src:${REPO_ROOT}/mm_utils/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Unbuffered python so tee sees loss lines promptly.
 export PYTHONUNBUFFERED=1
@@ -41,7 +45,9 @@ run_train() {
     fi
     # Append to the existing console log.
     LOG_PATH="${OUTPUT_DIR}/train_console.log"
-    lerobot-train \
+    # Wrapper patches LeRobot so observation.* width-1 vectors stay vectors
+    # (needed for env_state=zeros). Falls back to plain lerobot-train otherwise.
+    python -m mm_run.scripts.lerobot_train_act \
       --config_path="${RESUME_CONFIG}" \
       --resume=true \
       --steps="${STEPS:?STEPS is required when resuming (e.g. STEPS=40000)}" \
@@ -53,13 +59,13 @@ run_train() {
     # Tee to a sibling log; move into OUTPUT_DIR after train creates it.
     mkdir -p "$(dirname "${OUTPUT_DIR}")"
     LOG_PATH="${OUTPUT_DIR}.train_console.log"
-    lerobot-train \
+    python -m mm_run.scripts.lerobot_train_act \
       --dataset.root="${DATASET_ROOT}" \
       --dataset.repo_id="${REPO_ID}" \
       --policy.type=act \
       --policy.push_to_hub=false \
-      --policy.chunk_size="${CHUNK_SIZE:-50}" \
-      --policy.n_action_steps="${N_ACTION_STEPS:-25}" \
+      --policy.chunk_size="${CHUNK_SIZE:-25}" \
+      --policy.n_action_steps="${N_ACTION_STEPS:-12}" \
       --policy.dim_model="${DIM_MODEL:-256}" \
       --policy.dim_feedforward="${DIM_FF:-1024}" \
       --policy.n_encoder_layers="${N_ENC_LAYERS:-2}" \
@@ -69,7 +75,7 @@ run_train() {
       --job_name="${JOB_NAME:-act_table_wipe_smoke_tight}" \
       --policy.device=cuda \
       --batch_size="${BATCH_SIZE:-8}" \
-      --steps="${STEPS:-20000}" \
+      --steps="${STEPS:-40000}" \
       --eval_freq=0 \
       --save_freq="${SAVE_FREQ:-5000}" \
       --log_freq="${LOG_FREQ:-200}" \

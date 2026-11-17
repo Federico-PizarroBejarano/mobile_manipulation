@@ -525,9 +525,18 @@ class ControllerROSNode:
         return m
 
     def _end_mpc_cycle(self, cycle_t0, period, rate):
-        """Pad the cycle to ``period``: sim time via ``rate``, else leftover wall time."""
+        """Pad the cycle to ``period``: lockstep, sim ``rate``, or leftover wall time."""
+        from mm_utils.sim_lockstep import end_control_cycle, lockstep_enabled
+
         work_s = time.perf_counter() - cycle_t0
-        if self._use_sim_time:
+        if lockstep_enabled():
+            end_control_cycle(
+                rate,
+                period,
+                getattr(self, "_cycle_done_pub", None),
+                use_lockstep=True,
+            )
+        elif self._use_sim_time:
             rate.sleep()
         else:
             leftover = float(period) - work_s
@@ -765,6 +774,15 @@ class ControllerROSNode:
         if self.bag_recorder.last_error is not None:
             rospy.logwarn(
                 "rosbag record failed to start: %s", self.bag_recorder.last_error
+            )
+
+        from mm_utils.sim_lockstep import ControlCycleDonePublisher, lockstep_enabled
+
+        self._cycle_done_pub = None
+        if lockstep_enabled():
+            self._cycle_done_pub = ControlCycleDonePublisher()
+            rospy.loginfo(
+                "MPC lockstep: signaling /mm_run/control_cycle_done each cycle"
             )
 
         self.sot.activatePlanners()
@@ -1017,11 +1035,17 @@ class ControllerROSNode:
 
         Circle ends a running trial. Non-interactive (no TTY): wait for Square
         if joy is already publishing, otherwise start immediately so CI/sim
-        without a pad does not hang.
+        without a pad does not hang. ``/mm_run/auto_start`` forces an immediate
+        start (unattended ACT eval).
         """
         maybe_prompt_trial_metadata(self.logger)
         self.start_button_interface.reset_button()
         self.end_button_interface.reset_button()
+        from mm_utils.teleop_joy import AUTO_START_PARAM
+
+        if bool(rospy.get_param(AUTO_START_PARAM, False)):
+            print("----- Auto-start (/mm_run/auto_start) -----")
+            return
         enter_pressed = threading.Event()
 
         if sys.stdin.isatty():

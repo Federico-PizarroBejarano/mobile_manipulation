@@ -40,7 +40,16 @@ from mm_utils.robotiq_gripper import (
     seed_gripper_mode_position,
     toggle_gripper_open,
 )
-from mm_utils.teleop_joy import FORCE_ZERO_LL_KP_PARAM, STICKS_ACTIVE_PARAM
+from mm_utils.sim_lockstep import (
+    ControlCycleDonePublisher,
+    end_control_cycle,
+    lockstep_enabled,
+)
+from mm_utils.teleop_joy import (
+    AUTO_START_PARAM,
+    FORCE_ZERO_LL_KP_PARAM,
+    STICKS_ACTIVE_PARAM,
+)
 from mm_utils.teleop_mapping import (
     END_TRIAL_BUTTON,
     START_TRIAL_BUTTON,
@@ -49,6 +58,7 @@ from mm_utils.teleop_mapping import (
 from mm_utils.teleop_session_logging import (
     TrialBagRecorder,
     append_teleop_sample,
+    apply_act_run,
     apply_logging_profile,
     apply_teleop_backend,
     clear_experiment_timestamp,
@@ -72,7 +82,35 @@ class ActTeleopROSNode:
         parser.add_argument("--planner_config", type=str, default="default")
         parser.add_argument("--logging_sub_folder", type=str, default="default")
         parser.add_argument("--checkpoint", required=True)
-        parser.add_argument("--n-action-steps", type=int, default=25)
+        parser.add_argument(
+            "--n-action-steps",
+            type=int,
+            default=12,
+            help="ACT execute horizon (frozen recipe open-loop steps per infer)",
+        )
+        parser.add_argument(
+            "--boundary-blend",
+            type=float,
+            default=0.5,
+            help="Weight on previous chunk leftover at refresh in [0,1] (frozen: 0.5)",
+        )
+        parser.add_argument(
+            "--boundary-blend-mode",
+            default="decay",
+            choices=("constant", "decay", "head"),
+            help="How boundary_blend weight is applied (frozen: decay)",
+        )
+        parser.add_argument(
+            "--boundary-blend-head",
+            type=int,
+            default=3,
+            help="For mode=head: number of steps at the seam to blend",
+        )
+        parser.add_argument(
+            "--temporal-ensemble-coeff",
+            default="none",
+            help="Paper-style temporal ensembling coeff (none=off; requires na=1)",
+        )
         args = parser.parse_args(argv[1:])
 
         config = parsing.load_config(args.config)
@@ -130,6 +168,7 @@ class ActTeleopROSNode:
             log={},
         )
         self._cycle_t0 = None
+        self._cycle_done_pub = None
         self._saved = False
 
         self.robot_mdl = MobileManipulator3D(self.ctrl_config)
@@ -141,8 +180,36 @@ class ActTeleopROSNode:
         # keep working.
         self._policy = ActPolicySubprocess(args.checkpoint, nu=self.nu)
         atexit.register(self._policy.close)
+        # Launch may pass 0 (=checkpoint for act_ee); fall back to frozen recipe.
+        n_action_steps = (
+            int(args.n_action_steps) if int(args.n_action_steps) > 0 else 12
+        )
+        boundary_blend = float(args.boundary_blend)
+        te_raw = str(args.temporal_ensemble_coeff).strip().lower()
+        temporal_ensemble_coeff = (
+            None if te_raw in ("", "none", "null", "off") else float(te_raw)
+        )
+        if temporal_ensemble_coeff is not None:
+            # Paper / LeRobot path: every-tick infer + online exp average.
+            n_action_steps = 1
+            boundary_blend = 0.0
         self.runner = ActChunkRunner(
-            self._predict_chunk, n_action_steps=int(args.n_action_steps)
+            self._predict_chunk,
+            n_action_steps=n_action_steps,
+            boundary_blend=boundary_blend,
+            boundary_blend_mode=str(args.boundary_blend_mode),
+            boundary_blend_head=int(args.boundary_blend_head),
+            temporal_ensemble_coeff=temporal_ensemble_coeff,
+        )
+        apply_act_run(
+            self.logger,
+            args.checkpoint,
+            n_action_steps=self.runner.n_action_steps,
+            boundary_blend=self.runner.boundary_blend,
+            boundary_blend_mode=self.runner.boundary_blend_mode,
+            boundary_blend_head=self.runner.boundary_blend_head,
+            nu=self.nu,
+            temporal_ensemble_coeff=self.runner.temporal_ensemble_coeff,
         )
 
         self.robot_interface = MobileManipulatorROSInterface()
@@ -174,10 +241,20 @@ class ActTeleopROSNode:
         rospy.set_param("/controller_started", False)
         rospy.on_shutdown(self._on_shutdown)
 
+        te_s = (
+            "off"
+            if self.runner.temporal_ensemble_coeff is None
+            else f"{self.runner.temporal_ensemble_coeff:g}"
+        )
         rospy.loginfo(
-            "ACT teleop: checkpoint=%s n_action_steps=%d",
+            "ACT teleop: checkpoint=%s n_action_steps=%d "
+            "boundary_blend=%.3f mode=%s head=%d temporal_ensemble=%s",
             args.checkpoint,
             self.runner.n_action_steps,
+            self.runner.boundary_blend,
+            self.runner.boundary_blend_mode,
+            self.runner.boundary_blend_head,
+            te_s,
         )
 
     def _sync_session_timestamp(self):
@@ -243,9 +320,15 @@ class ActTeleopROSNode:
 
     def _wait_for_joint_states(self, rate):
         rospy.loginfo("Waiting for joint states ...")
+        # If sim already entered lockstep (stale /controller_started), keep pulsing
+        # so joint_states can arrive.
+        ctrl_period = 1.0 / self.rate_hz
         while not self.robot_interface.ready() and not rospy.is_shutdown():
             self.robot_interface.brake()
-            rate.sleep()
+            if self._cycle_done_pub is not None:
+                end_control_cycle(rate, ctrl_period, self._cycle_done_pub)
+            else:
+                rate.sleep()
         if rospy.is_shutdown():
             raise rospy.ROSInterruptException("shutdown while waiting for joints")
         rospy.loginfo("ACT teleop received joint states.")
@@ -254,6 +337,9 @@ class ActTeleopROSNode:
         maybe_prompt_trial_metadata(self.logger)
         self.start_button_interface.reset_button()
         self.end_button_interface.reset_button()
+        if bool(rospy.get_param(AUTO_START_PARAM, False)):
+            print("----- Auto-start (/mm_run/auto_start) -----")
+            return
         enter_pressed = threading.Event()
 
         if sys.stdin.isatty():
@@ -436,7 +522,7 @@ class ActTeleopROSNode:
 
     def _publish_velocity_plan(self, v_cmd, t):
         v_cmd = np.asarray(v_cmd, dtype=float).reshape(self.nu)
-        N = 1
+        N = 2
         u_bar = np.zeros((N, self.nu))
         v_bar = np.tile(v_cmd, (N + 1, 1))
         q = np.asarray(self.robot_interface.q, dtype=float).reshape(-1)[: self.dof]
@@ -455,6 +541,13 @@ class ActTeleopROSNode:
 
     def run(self):
         rate = rospy.Rate(self.rate_hz)
+        # Publish cycle-done before waits so a lockstep sim can keep advancing.
+        self._cycle_done_pub = None
+        if lockstep_enabled():
+            self._cycle_done_pub = ControlCycleDonePublisher()
+            rospy.loginfo(
+                "ACT teleop lockstep: signaling /mm_run/control_cycle_done each cycle"
+            )
         self._wait_for_joint_states(rate)
         self._wait_for_start(rate)
         self._sync_session_timestamp()
@@ -465,6 +558,7 @@ class ActTeleopROSNode:
                 "rosbag record failed to start: %s", self.bag_recorder.last_error
             )
 
+        ctrl_period = 1.0 / self.rate_hz
         rospy.set_param("/controller_started", True)
         rospy.loginfo("ACT teleop started (session %s)", self.session_timestamp)
         self._cycle_t0 = time.perf_counter()
@@ -509,7 +603,7 @@ class ActTeleopROSNode:
                 joy_axes,
                 joy_buttons,
             )
-            rate.sleep()
+            end_control_cycle(rate, ctrl_period, self._cycle_done_pub)
 
         self._publish_velocity_plan(np.zeros(self.nu), rospy.Time.now().to_sec())
         self.robot_interface.brake()
