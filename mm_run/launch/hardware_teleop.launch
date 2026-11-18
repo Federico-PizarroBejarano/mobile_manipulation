@@ -11,7 +11,7 @@
   <arg name="logging_sub_folder" default="default"/>
   <arg name="teleop" default="mpsf" doc="mpsf, direct, rl, act, or act_ee"/>
   <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act|act_ee"/>
-  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state for teleop:=act_ee (obs_duplicate|ee_pose|zeros)"/>
+  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state: obs_duplicate|ee_pose (act, act_ee) or zeros (act_ee only)"/>
   <arg name="act_n_action_steps" default="12" doc="ACT execute horizon (frozen recipe; 0=from checkpoint for act_ee)"/>
   <arg name="act_boundary_blend" default="0.5" doc="ACT boundary blend weight [0,1] (frozen: 0.5)"/>
   <arg name="act_boundary_blend_mode" default="decay" doc="constant|decay|head (frozen: decay)"/>

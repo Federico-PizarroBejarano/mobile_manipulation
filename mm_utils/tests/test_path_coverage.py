@@ -54,6 +54,19 @@ def test_zero_length_polyline_returns_zero():
     )
 
 
+def test_height_offset_does_not_reduce_coverage():
+    waypoints = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float)
+    ee = np.linspace([0.0, 0.0, 0.2], [1.0, 0.0, 0.2], 21)
+    cov = compute_polyline_coverage(ee, waypoints, epsilon=0.01, sample_spacing=0.05)
+    assert cov == pytest.approx(1.0)
+    ee_xy = ee.copy()
+    ee_xy[:, 1] += 0.05
+    assert (
+        compute_polyline_coverage(ee_xy, waypoints, epsilon=0.01, sample_spacing=0.05)
+        == 0.0
+    )
+
+
 def test_epsilon_boundary_is_inclusive():
     # Single-segment path; EE exactly epsilon away from x=0.5 sample
     waypoints = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float)

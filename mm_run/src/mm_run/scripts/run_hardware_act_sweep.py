@@ -18,6 +18,12 @@ Sweeps:
            (direct u_cmd, MPC u_cmd, MPC EE), 3 trials each.
            Rank by smoothness at the chunk refresh, not path coverage.
   models   15 last-checkpoint models, 5 trials each, decay blend 0.5.
+           --n-action-steps sets the execute horizon (12 for direct and
+           MPC EE, 25 for MPC u_cmd). Complete cells are skipped.
+  ensemble coefficients 0.01, 0.05, 0.1, -0.05. Two trials each on two
+           checkpoints per policy (the horizon-12 miss, then the covered
+           cell): 48 trials. Horizon 1 and blend 0. Startup must log those,
+           not the launch defaults.
 
 Requires thing.launch (robot + joystick) already running.
 """
@@ -32,11 +38,13 @@ from pathlib import Path
 
 from mm_utils.hardware_sweep import (
     DECAY_TRIALS,
+    ENSEMBLE_TRIALS,
     MODEL_TRIALS,
     TABLE_WIPE_LOG_DIR,
     SweepCell,
     after_trial_action,
     decay_blend_cells,
+    ensemble_coeff_cells,
     model_cells,
     new_trial_dir,
     trial_dirs,
@@ -45,18 +53,25 @@ from mm_utils.hardware_sweep import (
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("sweep", choices=("decay", "models"))
+    p.add_argument("sweep", choices=("decay", "models", "ensemble"))
     p.add_argument(
         "--trials",
         type=int,
         default=None,
-        help="Override trials per cell (decay default 3, models default 5)",
+        help="Override trials per cell (decay 3, models 5, ensemble 2)",
     )
     p.add_argument(
         "--boundary-blend",
         type=float,
         default=0.5,
         help="Decay blend for every models-sweep policy (chosen: 0.5)",
+    )
+    p.add_argument(
+        "--n-action-steps",
+        type=int,
+        default=12,
+        help="ACT execute horizon for every models-sweep policy "
+        "(12 for direct and MPC EE, 25 for MPC u_cmd)",
     )
     p.add_argument("--backup-distance", type=float, default=0.2)
     p.add_argument("--backup-speed", type=float, default=0.25)
@@ -114,8 +129,15 @@ def _cells(args):
     if args.sweep == "decay":
         trials = DECAY_TRIALS if args.trials is None else args.trials
         return decay_blend_cells(trials=trials)
+    if args.sweep == "ensemble":
+        trials = ENSEMBLE_TRIALS if args.trials is None else args.trials
+        return ensemble_coeff_cells(trials=trials)
     trials = MODEL_TRIALS if args.trials is None else args.trials
-    return model_cells(boundary_blend=args.boundary_blend, trials=trials)
+    return model_cells(
+        boundary_blend=args.boundary_blend,
+        trials=trials,
+        n_action_steps=args.n_action_steps,
+    )
 
 
 def _launch(cell: SweepCell, config: Path, checkpoint: Path) -> int:
@@ -225,13 +247,15 @@ def run_sweep(args) -> int:
     for cell in cells:
         done = len(trial_dirs(root / cell.logging_sub_folder))
         print(
-            "  %s  %d/%d  teleop=%s  blend=%g  %s"
+            "  %s  %d/%d  teleop=%s  na=%d  blend=%g  ens=%s  %s"
             % (
                 cell.name,
                 done,
                 cell.trials,
                 cell.teleop,
+                cell.n_action_steps,
                 cell.boundary_blend,
+                cell.temporal_ensemble_coeff,
                 cell.checkpoint(outputs),
             ),
             flush=True,
@@ -251,8 +275,16 @@ def run_sweep(args) -> int:
         while len(trial_dirs(cell_dir)) < cell.trials:
             done = len(trial_dirs(cell_dir))
             print(
-                "\n=== %s  trial %d/%d  blend=%g  %s ==="
-                % (cell.name, done + 1, cell.trials, cell.boundary_blend, cell.teleop),
+                "\n=== %s  trial %d/%d  na=%d  blend=%g  ens=%s  %s ==="
+                % (
+                    cell.name,
+                    done + 1,
+                    cell.trials,
+                    cell.n_action_steps,
+                    cell.boundary_blend,
+                    cell.temporal_ensemble_coeff,
+                    cell.teleop,
+                ),
                 flush=True,
             )
             before = trial_dirs(cell_dir)

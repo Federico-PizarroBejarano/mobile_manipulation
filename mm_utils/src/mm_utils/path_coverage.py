@@ -63,7 +63,11 @@ def compute_polyline_coverage(
     epsilon: float,
     sample_spacing: float,
 ) -> float:
-    """Fraction of arc-length samples within ``epsilon`` (3D) of any EE pose."""
+    """Fraction of arc-length samples within ``epsilon`` of any EE pose.
+
+    Distance is horizontal (x, y). Height is ignored, so a tool or table
+    offset in z does not open a gap along the wipe.
+    """
     ee_xyz = np.asarray(ee_xyz, dtype=float).reshape(-1, 3)
     if ee_xyz.shape[0] == 0 or epsilon < 0:
         return 0.0
@@ -71,9 +75,8 @@ def compute_polyline_coverage(
     if samples.shape[0] == 0:
         return 0.0
 
-    # For each sample, min distance to any EE point
-    # samples (N,1,3) - ee (1,M,3) → (N,M)
-    d = np.linalg.norm(samples[:, None, :] - ee_xyz[None, :, :], axis=2)
+    # For each sample, min horizontal distance to any EE point.
+    d = np.linalg.norm(samples[:, None, :2] - ee_xyz[None, :, :2], axis=2)
     covered = np.min(d, axis=1) <= float(epsilon)
     return float(np.count_nonzero(covered) / covered.size)
 

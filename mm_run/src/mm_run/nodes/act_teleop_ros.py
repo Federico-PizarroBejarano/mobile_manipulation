@@ -111,7 +111,14 @@ class ActTeleopROSNode:
             default="none",
             help="Paper-style temporal ensembling coeff (none=off; requires na=1)",
         )
+        parser.add_argument(
+            "--env-state",
+            default="obs_duplicate",
+            choices=("obs_duplicate", "ee_pose"),
+            help="ACT observation.environment_state: q copy or FK EE pose (xyz+rpy)",
+        )
         args = parser.parse_args(argv[1:])
+        self._env_state = str(args.env_state)
 
         config = parsing.load_config(args.config)
         if args.ctrl_config and args.ctrl_config != "default":
@@ -209,6 +216,7 @@ class ActTeleopROSNode:
             boundary_blend_mode=self.runner.boundary_blend_mode,
             boundary_blend_head=self.runner.boundary_blend_head,
             nu=self.nu,
+            env_state=self._env_state,
             temporal_ensemble_coeff=self.runner.temporal_ensemble_coeff,
         )
 
@@ -248,13 +256,14 @@ class ActTeleopROSNode:
         )
         rospy.loginfo(
             "ACT teleop: checkpoint=%s n_action_steps=%d "
-            "boundary_blend=%.3f mode=%s head=%d temporal_ensemble=%s",
+            "boundary_blend=%.3f mode=%s head=%d temporal_ensemble=%s env_state=%s",
             args.checkpoint,
             self.runner.n_action_steps,
             self.runner.boundary_blend,
             self.runner.boundary_blend_mode,
             self.runner.boundary_blend_head,
             te_s,
+            self._env_state,
         )
 
     def _sync_session_timestamp(self):
@@ -428,8 +437,17 @@ class ActTeleopROSNode:
         )
 
     def _predict_chunk(self, q: np.ndarray) -> np.ndarray:
-        """ACT obs: joint q; worker duplicates q into environment_state."""
+        """ACT obs: joint q. env_state is a q copy (worker default) or FK EE pose."""
         q = np.asarray(q, dtype=float).reshape(-1)[: self.dof]
+        if self._env_state == "ee_pose":
+            ee_pos, ee_quat = self.robot_mdl.getEE(q)
+            ee_pose = np.hstack(
+                [
+                    np.asarray(ee_pos, dtype=float).reshape(3),
+                    Rot.from_quat(np.asarray(ee_quat, dtype=float)).as_euler("xyz"),
+                ]
+            )
+            return self._policy.predict_chunk(q, env_state=ee_pose)
         return self._policy.predict_chunk(q)
 
     def _compute_v_cmd(self, cycle_period):

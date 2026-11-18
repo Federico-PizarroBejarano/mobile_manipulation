@@ -18,6 +18,7 @@ TIMESTAMP_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
 TABLE_WIPE_LOG_DIR = "mpsf_experiments/teleop_table_wipe"
 DECAY_SWEEP = "decay_blend"
 MODEL_SWEEP = "models"
+ENSEMBLE_SWEEP = "ensemble"
 
 DECAY_BLENDS = (0.0, 0.3, 0.5, 0.7)
 # Full 25-demo checkpoints only. Rank blends by smoothness at the chunk
@@ -29,6 +30,21 @@ DECAY_REFERENCE_RUNS = (
 )
 DECAY_TRIALS = 3
 MODEL_TRIALS = 5
+# Positive coeff weights older predictions. 0.01 is nearly flat over a chunk
+# of 25; 0.1 keeps mostly the early queries. -0.05 is the mirror of 0.05: the
+# newest query counts about 3x, which is the offset that can lock the last leg.
+ENSEMBLE_COEFFS = (0.01, 0.05, 0.1, -0.05)
+ENSEMBLE_TRIALS = 2
+# Two checkpoints per policy: the horizon-12 cell that left a leg outside
+# 10 cm, then the cell that was already covered.
+ENSEMBLE_RUNS = (
+    ("act_il_mpc_ucmd_n15", "act"),
+    ("act_il_mpc_ucmd", "act"),
+    ("act_il_direct_ucmd_n15", "act"),
+    ("act_il_direct_ucmd", "act"),
+    ("act_il_mpc_ee_n20", "act_ee"),
+    ("act_il_mpc_ee_n10", "act_ee"),
+)
 
 _MODEL_SIZES = ("n5", "n10", "n15", "n20", "")
 _MODEL_FAMILIES = (
@@ -98,8 +114,44 @@ def decay_blend_cells(
     return cells
 
 
+def ensemble_coeff_name(coeff: float) -> str:
+    return "coeff_%s" % ("%g" % float(coeff))
+
+
+def ensemble_coeff_cells(
+    coeffs: Sequence[float] = ENSEMBLE_COEFFS,
+    runs: Sequence[tuple] = ENSEMBLE_RUNS,
+    trials: int = ENSEMBLE_TRIALS,
+) -> List[SweepCell]:
+    """Ensemble-coefficient screen. Two trials, horizon 1, blend off.
+
+    The nodes also force those two settings when a coefficient is set. Passing
+    them here keeps the launch command the same as the run that is logged.
+    """
+    cells = []
+    for run_name, teleop in runs:
+        for coeff in coeffs:
+            coeff_s = "%g" % float(coeff)
+            name = "%s/%s" % (run_name, ensemble_coeff_name(coeff))
+            cells.append(
+                SweepCell(
+                    name=name,
+                    teleop=teleop,
+                    run_name=run_name,
+                    logging_sub_folder="%s/%s/%s" % ("sweeps", ENSEMBLE_SWEEP, name),
+                    boundary_blend=0.0,
+                    n_action_steps=1,
+                    temporal_ensemble_coeff=coeff_s,
+                    trials=int(trials),
+                )
+            )
+    return cells
+
+
 def model_cells(
-    boundary_blend: float = 0.5, trials: int = MODEL_TRIALS
+    boundary_blend: float = 0.5,
+    trials: int = MODEL_TRIALS,
+    n_action_steps: int = 12,
 ) -> List[SweepCell]:
     """Five sizes of direct-ucmd, mpc-ucmd, and mpc-ee. ``last`` checkpoint each."""
     cells = []
@@ -113,6 +165,7 @@ def model_cells(
                     run_name=run_name,
                     logging_sub_folder="%s/%s/%s" % ("sweeps", MODEL_SWEEP, run_name),
                     boundary_blend=float(boundary_blend),
+                    n_action_steps=int(n_action_steps),
                     trials=int(trials),
                 )
             )

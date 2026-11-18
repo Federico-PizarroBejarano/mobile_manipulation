@@ -13,7 +13,7 @@
   <arg name="logging_sub_folder" default="default" doc="save data to a sub folder if set"/>
   <arg name="teleop" default="none" doc="direct|mpsf|rl|act|act_ee|none — which plan publisher to run"/>
   <arg name="act_checkpoint" default="" doc="LeRobot ACT checkpoint dir for teleop:=act|act_ee"/>
-  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state for teleop:=act_ee (obs_duplicate|ee_pose|zeros)"/>
+  <arg name="act_env_state" default="obs_duplicate" doc="ACT env_state: obs_duplicate|ee_pose (act, act_ee) or zeros (act_ee only)"/>
   <arg name="act_n_action_steps" default="12" doc="ACT execute horizon (frozen recipe; 0=from checkpoint for act_ee)"/>
   <arg name="act_boundary_blend" default="0.5" doc="ACT boundary blend weight [0,1] (frozen: 0.5)"/>
   <arg name="act_boundary_blend_mode" default="decay" doc="constant|decay|head (frozen: decay)"/>
@@ -43,7 +43,7 @@
     <param name="bag_all" value="$(arg bag_all)"/>
     <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
   </node>
-  <node if="$(eval arg('teleop') == 'act')" pkg="mm_run" type="act_teleop_ros.py" name="controller_act_teleop" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder) --checkpoint $(arg act_checkpoint) --n-action-steps $(arg act_n_action_steps) --boundary-blend $(arg act_boundary_blend) --boundary-blend-mode $(arg act_boundary_blend_mode) --boundary-blend-head $(arg act_boundary_blend_head) --temporal-ensemble-coeff $(arg act_temporal_ensemble_coeff)">
+  <node if="$(eval arg('teleop') == 'act')" pkg="mm_run" type="act_teleop_ros.py" name="controller_act_teleop" output="screen" required="true" args="--config $(arg config) --ctrl_config $(arg ctrl_config) --planner_config $(arg planner_config) --logging_sub_folder $(arg logging_sub_folder) --checkpoint $(arg act_checkpoint) --env-state $(arg act_env_state) --n-action-steps $(arg act_n_action_steps) --boundary-blend $(arg act_boundary_blend) --boundary-blend-mode $(arg act_boundary_blend_mode) --boundary-blend-head $(arg act_boundary_blend_head) --temporal-ensemble-coeff $(arg act_temporal_ensemble_coeff)">
     <param name="record_bag" value="$(arg record_bag)"/>
     <param name="bag_all" value="$(arg bag_all)"/>
     <remap from="mpc_plan" to="$(arg mpc_plan_topic)"/>
